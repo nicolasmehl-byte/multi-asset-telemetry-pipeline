@@ -1,0 +1,10 @@
+# Credenciales y variables de entorno (¡SÚPER CRÍTICO!)
+.env
+pass.env
+
+# Archivos compilados y caché de Python
+__pycache__/
+*.pyc
+
+# Bases de datos locales (SQLite)
+*.db
