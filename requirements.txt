@@ -1,0 +1,6 @@
+pyModbusTCP
+psycopg2-binary
+streamlit
+pandas
+plotly
+python-dotenv

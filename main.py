@@ -1,6 +1,8 @@
 # main.py
 import time              # Librería nativa para manejar las esperas y tiempos (sleep).
 from datetime import datetime  # Librería nativa para capturar la fecha y hora exacta del sistema de la PC.
+import logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 # Importamos nuestros propios módulos. Python busca estos archivos en la misma carpeta.
 import config
@@ -8,7 +10,8 @@ from database import init_db, save_reading
 from communication import read_machine_data
 
 def main():
-    print("--- Starting Multi-Asset IIoT Data Logger (Cloud Mode) ---")
+    logger = logging.getLogger(__name__)
+    logger.info("--- Starting Multi-Asset IIoT Data Logger (Cloud Mode) ---")
     
     # LLAMADA CORREGIDA: Pasamos la URL cloud de config.py para verificar la conexión a internet al arrancar.
     init_db(config.DATABASE_URL)
@@ -38,31 +41,42 @@ def main():
                     save_reading(config.DATABASE_URL, machine_name, sensor_data, current_time)
                     
                     # Mostramos un reporte limpio en la consola para el operario que mira la pantalla.
-                    print(f"[{current_time}] {machine_name} -> Presion: {sensor_data['pressure']} Bar | Temp: {sensor_data['temperature']} °C | Hrs: {sensor_data['run_hours']} h | I: {sensor_data['current']} A")
+                    logger.info("[%s] %s -> Presion: %s Bar | Temp: %s °C | Hrs: %s h | I: %s A",
+                        current_time,
+                        machine_name,
+                        sensor_data['pressure_bar'],
+                        sensor_data['temperature_c'],
+                        sensor_data['run_hours'],
+                        sensor_data['current_amps']
+                    )
                 else:
                     # CAMINO DEFENSIVO: La máquina no respondió. 
                     # Armamos un diccionario con valores None (que Postgres guardará como NULL).
                     offline_data = {
-                        "pressure": None, 
-                        "temperature": None, 
+                        "pressure_bar": None, 
+                        "temperature_c": None, 
                         "run_hours": None, 
-                        "current": None
+                        "current_amps": None
                     }
             
                     save_reading(config.DATABASE_URL, machine_name, offline_data, current_time)
                     
                     # Avisamos con una alerta visual en la consola de la planta.
-                    print(f"[{current_time}] ⚠️ ALERT: {machine_name} is OFFLINE. Failure logged. Retrying next cycle in {config.POLLING_INTERVAL} seconds...")
+                    logger.warning("[%s] ⚠️ ALERT: %s is OFFLINE. Failure logged. Retrying next cycle in %s seconds...",
+                        current_time,
+                        machine_name,
+                        config.POLLING_INTERVAL
+                    )
                     
             
-            print("-" * 70)  # Imprime una línea separadora estética cada vez que termina de escanear toda la planta.
+            logger.info("%s", "-" * 70)  # Imprime una línea separadora estética cada vez que termina de escanear toda la planta.
             
             # Duerme el programa los segundos configurados en config.py para no saturar el procesador de la PC.
             time.sleep(config.POLLING_INTERVAL)
             
     except KeyboardInterrupt:
         # Si el usuario aprieta CTRL + C en la terminal, Python frena el "try" y salta directo acá.
-        print("\nLogger execution stopped by user. Exiting safely...")
+        logger.info("Logger execution stopped by user. Exiting safely...")
 
 # Si el usuario ejecutó este archivo directamente (py main.py), arrancá ejecutando la función main().
 if __name__ == "__main__":

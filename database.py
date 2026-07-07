@@ -1,7 +1,11 @@
 # database.py
+import logging
+import os
 import psycopg2
 import sqlite3
 import config
+
+logger = logging.getLogger(__name__)
 
 # Nombre del archivo de base de datos local (se creará en la misma carpeta)
 DB_LOCAL_NAME = "backup_mantenimiento.db"
@@ -36,16 +40,16 @@ def guardar_en_local(machine_name, data, timestamp):
         """, (
             timestamp,
             machine_name,
-            data["pressure"],
-            data["temperature"],
+            data["pressure_bar"],
+            data["temperature_c"],
             data["run_hours"],
-            data["current"]
+            data["current_amps"]
         ))
         conexion.commit()
         conexion.close()
-        print(f"💾 [BACKUP LOCAL] Datos de {machine_name} respaldados en SQLite por falta de red.")
+        logger.info("💾 [BACKUP LOCAL] Datos de %s respaldados en SQLite por falta de red.", machine_name)
     except Exception as e:
-        print(f"❌ Error crítico al escribir en SQLite local: {e}")
+        logger.error("❌ Error crítico al escribir en SQLite local: %s", e)
 
 def sincronizar_datos_pendientes(db_url):
     """Busca si hay datos acumulados en SQLite y los sube uno a uno a Supabase."""
@@ -58,7 +62,7 @@ def sincronizar_datos_pendientes(db_url):
         conn_local.close()
         return  # No hay nada viejo acumulado, salimos directo
 
-    print(f"🔄 [SINCRONIZACIÓN] Detectadas {len(filas_pendientes)} lecturas pendientes en la notebook. Intentando subir...")
+    logger.info("🔄 [SINCRONIZACIÓN] Detectadas %s lecturas pendientes en la notebook. Intentando subir...", len(filas_pendientes))
     
     conn_cloud = None
     try:
@@ -81,9 +85,9 @@ def sincronizar_datos_pendientes(db_url):
                 # Si la nube lo aceptó, lo borramos de la base local para no duplicar
                 cursor_local.execute("DELETE FROM telemetria_backup WHERE id = ?", (id_local,))
                 conn_local.commit()
-                print(f"✅ Sincronizado registro local ID {id_local} de {machine_name}")
+                logger.info("✅ Sincronizado registro local ID %s de %s", id_local, machine_name)
             except Exception as e:
-                print(f"❌ Falló el registro ID {id_local} en tránsito. Se frena la sincronización: {e}")
+                logger.error("❌ Falló el registro ID %s en tránsito. Se frena la sincronización: %s", id_local, e)
                 if conn_cloud:
                     conn_cloud.rollback()
                 break  # Corta el bucle para reintentar en el próximo minuto cuando el Wi-Fi esté más firme
@@ -91,20 +95,30 @@ def sincronizar_datos_pendientes(db_url):
         cursor_cloud.close()
     except Exception as e:
         # Si ni siquiera pudimos abrir el pooler de Supabase, salimos silenciosamente
-        print(f"⚠️ La nube sigue inaccesible para sincronizar: {e}")
+        logger.warning("⚠️ La nube sigue inaccesible para sincronizar: %s", e)
     finally:
         if conn_cloud:
             conn_cloud.close()
         conn_local.close()
-def get_cloud_connection(db_url):
-    """Establece una conexión con la base cloud desarmando los parámetros para evitar errores de SNI/IPv6."""
+def get_cloud_connection(db_url=None):
+    """Establece una conexión con la base cloud usando variables de entorno.
+
+    Si no hay variables definidas, usa los valores por defecto que había hardcodeados.
+    """
+    host = os.getenv("DB_HOST", "aws-1-sa-east-1.pooler.supabase.com")
+    port = int(os.getenv("DB_PORT", "6543"))
+    database = os.getenv("DB_NAME", "postgres")
+    user = os.getenv("DB_USER", "postgres.bmuchkgxvcggummezhhh")
+    password = os.getenv("DB_PASSWORD")
+    sslmode = os.getenv("DB_SSLMODE", "require")
+
     return psycopg2.connect(
-        host="aws-1-sa-east-1.pooler.supabase.com",
-        port=6543,
-        database="postgres",
-        user="postgres.bmuchkgxvcggummezhhh",
-        password=config.DB_PASSWORD,
-        sslmode="require"
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password,
+        sslmode=sslmode
     )
 
 def init_db(db_url):
@@ -117,12 +131,12 @@ def init_db(db_url):
         cursor = connection.cursor()
         cursor.execute("SELECT version();")
         db_version = cursor.fetchone()
-        print(f"✅ Conexión exitosa a PostgreSQL en la nube! Versión del motor: {db_version[0]}")
+        logger.info("✅ Conexión exitosa a PostgreSQL en la nube! Versión del motor: %s", db_version[0])
         cursor.close()
         connection.close()
     except Exception as e:
-        print(f"⚠️ Alerta de conexión a la nube al iniciar: {e}")
-        print("El script iniciará operando en MODO OFFLINE (Guardando localmente en SQLite hasta recuperar red).")
+        logger.warning("⚠️ Alerta de conexión a la nube al iniciar: %s", e)
+        logger.info("El script iniciará operando en MODO OFFLINE (Guardando localmente en SQLite hasta recuperar red).")
 
 def save_reading(db_url, machine_name, data, timestamp):
     """Inserta un registro en PostgreSQL. Si falla el Wi-Fi, lo respalda localmente."""
@@ -131,7 +145,7 @@ def save_reading(db_url, machine_name, data, timestamp):
     try:
         sincronizar_datos_pendientes(db_url)
     except Exception as e:
-        print(f"⚠️ Error en proceso secundario de sincronización: {e}")
+        logger.warning("⚠️ Error en proceso secundario de sincronización: %s", e)
 
     # 2. Intentamos la inserción normal en la nube
     query = '''
@@ -147,17 +161,17 @@ def save_reading(db_url, machine_name, data, timestamp):
         cursor.execute(query, (
             timestamp, 
             machine_name, 
-            data["pressure"], 
-            data["temperature"], 
+            data["pressure_bar"], 
+            data["temperature_c"], 
             data["run_hours"], 
-            data["current"]
+            data["current_amps"]
         ))
         
         connection.commit()
         cursor.close()
-        print(f"☁️ [SUPABASE] Datos de {machine_name} subidos a la nube con éxito.")
+        logger.info("☁️ [SUPABASE] Datos de %s subidos a la nube con éxito.", machine_name)
     except Exception as e:
-        print(f"⚠️ Falló la escritura en la nube para {machine_name}: {e}")
+        logger.warning("⚠️ Falló la escritura en la nube para %s: %s", machine_name, e)
         if connection:
             connection.rollback()
         

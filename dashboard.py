@@ -6,123 +6,209 @@ import plotly.express as px
 import os
 from dotenv import load_dotenv
 
-# Configuración inicial de la página (Minimalista e Industrial)
-st.set_page_config(page_title="IIoT Telemetry Panel", page_icon="⚙️", layout="wide")
+# ==============================================================================
+# 1. CONFIGURACIÓN DE PÁGINA (Debe ser lo primero en ejecutarse)
+# ==============================================================================
+st.set_page_config(page_title="Industrial Telemetry Pipeline", page_icon="🏭", layout="wide")
 
-# Cargar variables de entorno (tu pass.env)
-load_dotenv("pass.env")
+# ==============================================================================
+# 2. CONTROL DE RUTAS ABSOLUTAS Y CARGA DE ENTORNO
+# ==============================================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RUTA_ENV = os.path.join(BASE_DIR, "pass.env")
+load_dotenv(RUTA_ENV)
 
-# --- CONEXIÓN A BASE DE DATOS ---
-@st.cache_resource(ttl=60) # Cachea la conexión por 60 seg para no saturar Supabase
+# ==============================================================================
+# 3. CONEXIÓN OPTIMIZADA A BASE DE DATOS (Con freno de seguridad)
+# ==============================================================================
+@st.cache_resource(ttl=60)
 def init_connection():
-    return psycopg2.connect(
-        host="aws-1-sa-east-1.pooler.supabase.com",
-        port=6543,
-        database="postgres",
-        user="postgres.bmuchkgxvcggummezhhh",
-        password=os.getenv("DB_PASSWORD"),
-        sslmode="require"
-    )
+    # Buscamos la URL completa que usa tu configuración de Supabase
+    db_url = os.getenv("DATABASE_URL")
+  
+    # Freno de mano preventivo por si pasa algo
+    if not db_url:
+        st.error("⚠️ **Error de Credenciales:** Python leyó el archivo `pass.env` pero NO encontró la variable `DATABASE_URL` adentro.")
+        st.info(f"Ruta del archivo verificado: `{RUTA_ENV}`")
+        st.stop() 
 
-@st.cache_data(ttl=10) # Refresca los datos cada 10 segundos
+    # psycopg2 se conecta directo usando el string completo sin separar campos
+    return psycopg2.connect(db_url)
+
+
+    #port = int(os.getenv("DB_PORT", "6543"))
+    #database = os.getenv("DB_NAME")
+    #user = os.getenv("DB_USER")
+    #password = os.getenv("DB_PASSWORD")
+    #sslmode = os.getenv("DB_SSLMODE", "require")
+
+    
+
+# ==============================================================================
+# 4. FUNCIONES DE EXTRACCIÓN DE DATOS (Queries optimizadas e insensibles a mayúsculas)
+# ==============================================================================
+@st.cache_data(ttl=5)
 def get_latest_data():
     conn = init_connection()
-    # Traemos el último registro de cada máquina
+    # Usamos UPPER() para que agrupe "Sullair_Compressor" y "SULLAIR_COMPRESSOR" como uno solo
     query = """
-    SELECT DISTINCT ON (machine_name) 
-        machine_name, timestamp, pressure_bar, temperature_c, run_hours, current_amps
+    SELECT DISTINCT ON (UPPER(TRIM(machine_name))) 
+        UPPER(TRIM(machine_name)) as machine_name, timestamp, pressure_bar, temperature_c, run_hours, current_amps
     FROM historical_telemetry
-    ORDER BY machine_name, timestamp DESC;
+    ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
     """
-    df = pd.read_sql(query, conn)
-    return df
+    return pd.read_sql(query, conn)
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=15)
 def get_historical_data(machine):
     conn = init_connection()
-    # Traemos los últimos 500 registros de la máquina seleccionada
-    query = f"""
+    # Modificamos el WHERE para que la búsqueda en el historial no falle por tipografía
+    query = """
     SELECT timestamp, pressure_bar, temperature_c, current_amps
     FROM historical_telemetry
-    WHERE machine_name = '{machine}'
+    WHERE UPPER(TRIM(machine_name)) = UPPER(TRIM(%s))
     ORDER BY timestamp DESC
-    LIMIT 500;
+    LIMIT 300;
     """
-    df = pd.read_sql(query, conn)
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    return df.sort_values('timestamp')
+    df = pd.read_sql(query, conn, params=(machine,))
+    if not df.empty:
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df = df.sort_values('timestamp')
+    return df
 
-# --- COMPONENTES VISUALES ---
-def draw_gauge(value, title, max_val, color):
-    """Genera un Gauge industrial minimalista con Plotly"""
+# ==============================================================================
+# 5. COMPONENTES VISUALES (Diseño de Manómetros)
+# ==============================================================================
+def draw_gauge(value, title, max_val, color, unit):
     fig = go.Figure(go.Indicator(
         mode = "gauge+number",
         value = value,
-        title = {'text': title, 'font': {'size': 18, 'color': 'white'}},
-        number = {'font': {'size': 36, 'color': 'white'}},
+        domain = {'x': [0, 1], 'y': [0, 1]},
+        title = {'text': f"<b>{title}</b>", 'font': {'size': 15, 'color': '#1E293B'}, 'align': 'center'},
+        number = {'font': {'size': 24, 'color': '#0F172A'}, 'suffix': f" {unit}"},
         gauge = {
-            'axis': {'range': [None, max_val], 'tickwidth': 1, 'tickcolor': "white"},
+            'axis': {'range': [0, max_val], 'tickwidth': 1, 'tickcolor': "#475569", 'tickfont': {'size': 10}},
             'bar': {'color': color},
-            'bgcolor': "rgba(0,0,0,0)",
-            'borderwidth': 0,
+            'bgcolor': "#E2E8F0",
+            'borderwidth': 0
         }
     ))
-    fig.update_layout(height=250, margin=dict(l=20, r=20, t=40, b=20), paper_bgcolor="rgba(0,0,0,0)")
+    fig.update_layout(
+        height=150, 
+        margin=dict(l=30, r=30, t=50, b=10), 
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)"
+    )
     return fig
 
-# --- INTERFAZ PRINCIPAL ---
-st.title("🏭 Plant Asset Monitoring | Real-Time Telemetry")
+# ==============================================================================
+# 6. INTERFAZ DE USUARIO (Streamlit Layout)
+# ==============================================================================
+st.title("🏭 Multi-Asset Telemetry Pipeline")
+st.caption("Monitoreo de estado y análisis de tendencias para activos industriales")
 st.markdown("---")
 
-# Pestañas de navegación
-tab1, tab2 = st.tabs(["🟢 Live Monitoring", "📈 Histórico de Tendencias"])
+tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
 
+# --- TAB 1: MONITOREO EN VIVO ---
 with tab1:
-    st.subheader("Estado Actual de Equipos")
     df_latest = get_latest_data()
     
     if not df_latest.empty:
-        # Creamos una columna para cada máquina
-        cols = st.columns(len(df_latest))
-        
         for index, row in df_latest.iterrows():
-            with cols[index]:
-                st.markdown(f"### {row['machine_name']}")
-                st.caption(f"Última actualización: {row['timestamp']}")
+            with st.container(border=True):
                 
-                # Fila interna para los Gauges (Presión y Temp)
-                gauge_col1, gauge_col2 = st.columns(2)
-                with gauge_col1:
-                    st.plotly_chart(draw_gauge(row['pressure_bar'], "Presión (Bar)", 15, "#00CC96"), use_container_width=True)
-                with gauge_col2:
-                    st.plotly_chart(draw_gauge(row['temperature_c'], "Temp (°C)", 100, "#EF553B"), use_container_width=True)
+                # 🔌 LÓGICA DE PROCESO: Si consume más de 2 Amperes, el activo está operando
+                if row['current_amps'] > 2.0:
+                    status_badge = """
+                    <span style='background-color: #DCFCE7; color: #15803D; padding: 8px 16px; 
+                    border-radius: 8px; font-weight: bold; font-size: 18px; border: 2px solid #BBF7D0;'>
+                        🟢 ENCENDIDO
+                    </span>
+                    """
+                else:
+                    status_badge = """
+                    <span style='background-color: #FEE2E2; color: #B91C1C; padding: 8px 16px; 
+                    border-radius: 8px; font-weight: bold; font-size: 18px; border: 2px solid #FCA5A5;'>
+                        🔴 APAGADO
+                    </span>
+                    """
                 
-                # Fila interna para métricas de texto plano (minimalista)
-                st.metric(label="Corriente Actual (A)", value=f"{row['current_amps']} A")
-                st.metric(label="Horas de Marcha", value=f"{row['run_hours']} h")
-                st.markdown("---")
+                # 🗂️ ENCABEZADO: Dividimos en columnas para colocar el nombre y el cartel alineados
+                col_header_title, col_header_status = st.columns([3, 1])
+                
+                with col_header_title:
+                    st.markdown(f"### ⚙️ {row['machine_name']}")
+                
+                with col_header_status:
+                    # Renderizamos el cartel flotado a la derecha
+                    st.markdown(f"<div style='text-align: right; margin-top: 12px;'>{status_badge}</div>", unsafe_allow_html=True)
+                
+                # 📊 CUADRÍCULA DE MEDIDORES (Tu lógica original intacta)
+                col_press, col_temp, col_amps, col_hours = st.columns(4)
+                
+                with col_press:
+                    st.plotly_chart(
+                        draw_gauge(row['pressure_bar'], "Presión", 15, "#00CC96", "Bar"), 
+                        use_container_width=True, 
+                        key=f"live_p_{row['machine_name']}"
+                    )
+                with col_temp:
+                    st.plotly_chart(
+                        draw_gauge(row['temperature_c'], "Temperatura", 100, "#EF553B", "°C"), 
+                        use_container_width=True, 
+                        key=f"live_t_{row['machine_name']}"
+                    )
+                with col_amps:
+                    st.markdown("<div style='min-height:25px;'></div>", unsafe_allow_html=True)
+                    st.metric(label="⚡ Corriente Motor", value=f"{row['current_amps']} A")
+                with col_hours:
+                    st.markdown("<div style='min-height:25px;'></div>", unsafe_allow_html=True)
+                    st.metric(label="⏱️ Horas de Marcha", value=f"{row['run_hours']} h")
+                
+                st.markdown(f"<p style='color:#64748B; font-size:12px; margin:0;'>Última actualización: {row['timestamp']}</p>", unsafe_allow_html=True)
     else:
-        st.warning("No hay datos recientes disponibles en Supabase.")
+        st.warning("No se encontraron activos transmitiendo en vivo.")
 
+        
+# --- TAB 2: HISTORIAL DE TENDENCIAS ---
 with tab2:
-    st.subheader("Análisis Histórico")
     df_latest_names = get_latest_data()
     
     if not df_latest_names.empty:
         machine_list = df_latest_names['machine_name'].tolist()
-        selected_machine = st.selectbox("Seleccione un equipo para analizar:", machine_list)
+        selected_machine = st.selectbox("Seleccione el activo a analizar:", machine_list, key="select_history_asset")
         
         df_hist = get_historical_data(selected_machine)
         
         if not df_hist.empty:
-            # Gráfico de Temperatura
-            fig_temp = px.line(df_hist, x='timestamp', y='temperature_c', title=f"Evolución Térmica - {selected_machine}")
-            fig_temp.update_traces(line_color='#EF553B')
-            st.plotly_chart(fig_temp, use_container_width=True)
+            st.markdown(f"#### Historial analítico para: **{selected_machine}** ({len(df_hist)} registros cargados)")
             
-            # Gráfico de Presión
-            fig_pres = px.line(df_hist, x='timestamp', y='pressure_bar', title=f"Evolución de Presión - {selected_machine}")
-            fig_pres.update_traces(line_color='#00CC96')
-            st.plotly_chart(fig_pres, use_container_width=True)
+            # --- GRÁFICO 1: TEMPERATURA ---
+            fig_temp = px.line(df_hist, x='timestamp', y='temperature_c', title="📊 Evolución Térmica del Activo", markers=True)
+            fig_temp.update_traces(line_color='#EF553B', marker=dict(size=5, opacity=0.8))
+            fig_temp.update_layout(
+                hovermode="x unified",
+                margin=dict(l=40, r=20, t=50, b=40),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="#F8FAFC",
+                xaxis=dict(showgrid=True, gridcolor='#E2E8F0', title="Línea de Tiempo"),
+                yaxis=dict(showgrid=True, gridcolor='#E2E8F0', title="Temperatura (°C)")
+            )
+            st.plotly_chart(fig_temp, use_container_width=True, key=f"chart_h_temp_{selected_machine}")
+            
+            # --- GRÁFICO 2: PRESIÓN ---
+            fig_pres = px.line(df_hist, x='timestamp', y='pressure_bar', title="📊 Comportamiento de Presión Dinámica", markers=True)
+            fig_pres.update_traces(line_color='#00CC96', marker=dict(size=5, opacity=0.8))
+            fig_pres.update_layout(
+                hovermode="x unified",
+                margin=dict(l=40, r=20, t=50, b=40),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="#F8FAFC",
+                xaxis=dict(showgrid=True, gridcolor='#E2E8F0', title="Línea de Tiempo"),
+                yaxis=dict(showgrid=True, gridcolor='#E2E8F0', title="Presión (Bar)")
+            )
+            st.plotly_chart(fig_pres, use_container_width=True, key=f"chart_h_pres_{selected_machine}")
+            
         else:
-            st.info("No hay suficientes datos históricos para este equipo.")
+            st.info(f"El activo {selected_machine} no registra datos históricos almacenados.")

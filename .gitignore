@@ -1,4 +1,4 @@
-# Credenciales y variables de entorno (¡SÚPER CRÍTICO!)
+# Credenciales y variables de entorno 
 .env
 pass.env
 
@@ -6,5 +6,5 @@ pass.env
 __pycache__/
 *.pyc
 
-# Bases de datos locales (SQLite)
+# Bases de datos locales (SQLite) 
 *.db
