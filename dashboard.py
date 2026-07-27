@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 # ==============================================================================
 # 1. CONFIGURACIÓN DE PÁGINA (Debe ser lo primero en ejecutarse)
 # ==============================================================================
-st.set_page_config(page_title="Industrial Telemetry Pipeline", page_icon="🏭", layout="wide")
+st.set_page_config(page_title="Monitoreo industrial ", page_icon="🏭", layout="wide")
 
 # ==============================================================================
 # 2. CONTROL DE RUTAS ABSOLUTAS Y CARGA DE ENTORNO
@@ -23,26 +23,12 @@ load_dotenv(RUTA_ENV)
 # ==============================================================================
 @st.cache_resource(ttl=60)
 def init_connection():
-    # Buscamos la URL completa que usa tu configuración de Supabase
     db_url = os.getenv("DATABASE_URL")
-  
-    # Freno de mano preventivo por si pasa algo
     if not db_url:
         st.error("⚠️ **Error de Credenciales:** Python leyó el archivo `pass.env` pero NO encontró la variable `DATABASE_URL` adentro.")
         st.info(f"Ruta del archivo verificado: `{RUTA_ENV}`")
         st.stop() 
-
-    # psycopg2 se conecta directo usando el string completo sin separar campos
     return psycopg2.connect(db_url)
-
-
-    #port = int(os.getenv("DB_PORT", "6543"))
-    #database = os.getenv("DB_NAME")
-    #user = os.getenv("DB_USER")
-    #password = os.getenv("DB_PASSWORD")
-    #sslmode = os.getenv("DB_SSLMODE", "require")
-
-    
 
 # ==============================================================================
 # 4. FUNCIONES DE EXTRACCIÓN DE DATOS (Queries optimizadas e insensibles a mayúsculas)
@@ -50,7 +36,6 @@ def init_connection():
 @st.cache_data(ttl=5)
 def get_latest_data():
     conn = init_connection()
-    # Usamos UPPER() para que agrupe "Sullair_Compressor" y "SULLAIR_COMPRESSOR" como uno solo
     query = """
     SELECT DISTINCT ON (UPPER(TRIM(machine_name))) 
         UPPER(TRIM(machine_name)) as machine_name, timestamp, pressure_bar, temperature_c, run_hours, current_amps
@@ -62,7 +47,6 @@ def get_latest_data():
 @st.cache_data(ttl=15)
 def get_historical_data(machine):
     conn = init_connection()
-    # Modificamos el WHERE para que la búsqueda en el historial no falle por tipografía
     query = """
     SELECT timestamp, pressure_bar, temperature_c, current_amps
     FROM historical_telemetry
@@ -102,23 +86,19 @@ def draw_gauge(value, title, max_val, color, unit):
     return fig
 
 # ==============================================================================
-# 6. INTERFAZ DE USUARIO (Streamlit Layout)
+# 6. FRAGMENTO DE MONITOREO EN VIVO (Auto-refresco eficiente cada 10 segundos)
 # ==============================================================================
-st.title("🏭 Multi-Asset Telemetry Pipeline")
-st.caption("Monitoreo de estado y análisis de tendencias para activos industriales")
-st.markdown("---")
-
-tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
-
-# --- TAB 1: MONITOREO EN VIVO ---
-with tab1:
+@st.fragment(run_every=10)
+def render_live_monitoring():
+    # Al ejecutarse cada 10s, esta función llamará a get_latest_data(). 
+    # Como el TTL del cache es de 5s, obligará a buscar los datos frescos en Supabase.
     df_latest = get_latest_data()
     
     if not df_latest.empty:
         for index, row in df_latest.iterrows():
             with st.container(border=True):
                 
-                # 🔌 LÓGICA DE PROCESO: Si consume más de 2 Amperes, el activo está operando
+                # 🔌 LÓGICA DE ESTADO OPERATIVO
                 if row['current_amps'] > 2.0:
                     status_badge = """
                     <span style='background-color: #DCFCE7; color: #15803D; padding: 8px 16px; 
@@ -134,17 +114,51 @@ with tab1:
                     </span>
                     """
                 
-                # 🗂️ ENCABEZADO: Dividimos en columnas para colocar el nombre y el cartel alineados
+                # 🗂️ ENCABEZADO: Nombre de máquina y Estado operativo
                 col_header_title, col_header_status = st.columns([3, 1])
-                
                 with col_header_title:
                     st.markdown(f"### ⚙️ {row['machine_name']}")
-                
                 with col_header_status:
-                    # Renderizamos el cartel flotado a la derecha
                     st.markdown(f"<div style='text-align: right; margin-top: 12px;'>{status_badge}</div>", unsafe_allow_html=True)
                 
-                # 📊 CUADRÍCULA DE MEDIDORES (Tu lógica original intacta)
+                # 🚨 LÓGICA DE ALERTAS VISUALES CRÍTICAS (Evaluación de Umbrales)
+                alert_messages = []
+                if row['temperature_c'] > 85.0:
+                    alert_messages.append(f"Alta Temperatura Detectada: {row['temperature_c']} °C (Umbral: >85°C)")
+                if row['pressure_bar'] > 10.0:
+                    alert_messages.append(f"Alta Presión Detectada: {row['pressure_bar']} Bar (Umbral: >10 Bar)")
+                
+                # Si hay eventos críticos, renderizamos los banners animados
+                if alert_messages:
+                    for alert in alert_messages:
+                        st.markdown(f"""
+                        <div class="industrial-alert-pulse">
+                            ⚠️ <strong>¡ALERTA DE PLANTA!</strong> {alert}
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Inyectamos estilos CSS para lograr el parpadeo suave de advertencia (color de alerta industrial)
+                    st.markdown("""
+                    <style>
+                    @keyframes industrial-pulse {
+                        0% { background-color: #FEE2E2; border-color: #EF4444; color: #991B1B; }
+                        50% { background-color: #FCA5A5; border-color: #DC2626; color: #7F1D1D; }
+                        100% { background-color: #FEE2E2; border-color: #EF4444; color: #991B1B; }
+                    }
+                    .industrial-alert-pulse {
+                        animation: industrial-pulse 1.2s infinite;
+                        padding: 12px 16px;
+                        border: 2px solid #EF4444;
+                        border-radius: 8px;
+                        margin-bottom: 10px;
+                        font-weight: bold;
+                        font-size: 15px;
+                        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                    }
+                    </style>
+                    """, unsafe_allow_html=True)
+                
+                # 📊 CUADRÍCULA DE MEDIDORES
                 col_press, col_temp, col_amps, col_hours = st.columns(4)
                 
                 with col_press:
@@ -170,6 +184,19 @@ with tab1:
     else:
         st.warning("No se encontraron activos transmitiendo en vivo.")
 
+# ==============================================================================
+# 7. INTERFAZ DE USUARIO PRINCIPAL (Streamlit Layout)
+# ==============================================================================
+st.title("🏭 Multi-Asset Telemetry Pipeline")
+st.caption("Monitoreo de estado y análisis de tendencias para activos industriales")
+st.markdown("---")
+
+tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
+
+# --- TAB 1: MONITOREO EN VIVO ---
+with tab1:
+    # Llamamos a nuestro fragmento aislado. Se refresca solo sin molestar al resto del script.
+    render_live_monitoring()
         
 # --- TAB 2: HISTORIAL DE TENDENCIAS ---
 with tab2:
