@@ -52,24 +52,14 @@ Este sistema realiza lo siguiente:
 
 3. Asegurarse de que `pass.env` no se suba al repositorio.
 
-### Variables de entorno soportadas
-
-- `DATABASE_URL`: URL completa de conexión a PostgreSQL. Es usada por el logger y el dashboard para conectarse a la nube.
-- `DB_HOST`: host de la base de datos en la nube.
-- `DB_PORT`: puerto de conexión.
-- `DB_NAME`: nombre de la base de datos.
-- `DB_USER`: usuario de PostgreSQL.
-- `DB_PASSWORD`: contraseña del usuario.
-- `DB_SSLMODE`: modo SSL de conexión (por defecto `require`).
-
-### Configuración Modbus
-
-En `config.py` se pueden ajustar:
-- `PORT_MODBUS`: puerto Modbus TCP (por defecto 502).
-- `MODBUS_SLAVE_ID`: unidad esclava del dispositivo.
-- `IP_AERCOM_22P`, `IP_CHILLER_TRANE`, `IP_SULLAIR_COMPRESSOR`: IPs de los equipos.
-- `REG_START_ADDRESS` y `REG_COUNT`: dirección inicial y cantidad de registros a leer.
-- `SCALE_*`: factores de escala para convertir valores enteros a valores reales.
+## Variables de entorno soportadas
+- `DB_HOST` (por defecto: `aws-1-sa-east-1.pooler.supabase.com`)
+- `DB_PORT` (por defecto: `6543`)
+- `DB_NAME` (por defecto: `postgres`)
+- `DB_USER` (por defecto: `postgres.bmuchkgxvcggummezhhh`)
+- `DB_PASSWORD`
+- `DB_SSLMODE` (por defecto: `require`)
+- `DATABASE_URL` (usado por `main.py` para arrancar el modo nube; también se puede dejar vacío y activar modo offline)
 
 ## Ejecución
 
