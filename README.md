@@ -24,14 +24,15 @@ Proyecto de telemetría IIoT con lectura Modbus, respaldo local en SQLite y dash
 2. Edita `pass.env` con tu contraseña de base de datos y otros valores si es necesario.
 3. Asegúrate de que `pass.env` esté en `.gitignore` para no subirlo al repositorio.
 
-## Variables de entorno soportadas
-- `DB_HOST` (por defecto: `aws-1-sa-east-1.pooler.supabase.com`)
-- `DB_PORT` (por defecto: `6543`)
-- `DB_NAME` (por defecto: `postgres`)
-- `DB_USER` (por defecto: `postgres.bmuchkgxvcggummezhhh`)
-- `DB_PASSWORD`
-- `DB_SSLMODE` (por defecto: `require`)
-- `DATABASE_URL` (usado por `main.py` para arrancar el modo nube; también se puede dejar vacío y activar modo offline)
+### Variables de entorno soportadas
+
+* `DB_HOST`: Host de la base de datos (por defecto: `aws-1-sa-east-1.pooler.supabase.com`)
+* `DB_PORT`: Puerto de conexión (por defecto: `6543`)
+* `DB_NAME`: Nombre de la base de datos (por defecto: `postgres`)
+* `DB_USER`: Usuario de la base de datos (ejemplo: `postgres.<TU_PROJECT_REF>`)
+* `DB_PASSWORD`: Contraseña del usuario de la base de datos
+* `DB_SSLMODE`: Modo de cifrado SSL (por defecto: `require`)
+* `DATABASE_URL`: String de conexión completo de PostgreSQL. Usado por `main.py` para el modo nube; si se deja vacío, el sistema conmuta automáticamente a modo offline (SQLite).
 
 ## Ejecución
 - Iniciar el logger principal:
