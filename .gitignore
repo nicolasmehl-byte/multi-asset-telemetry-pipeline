@@ -1,7 +1,8 @@
 # Credenciales y variables de entorno 
 .env
 pass.env
-
+borrar_id4.py
+iniciar_programa.bat
 # Archivos compilados y caché de Python
 __pycache__/
 *.pyc
