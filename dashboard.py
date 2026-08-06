@@ -148,36 +148,28 @@ def get_database_url():
 
 
 # ==============================================================================
-# 4. CONEXIÓN OPTIMIZADA A BASE DE DATOS
 # ==============================================================================
+# 4. CONEXIÓN OPTIMIZADA A BASE DE DATOS (HÍBRIDA LOCAL / CLOUD)
+# ==============================================================================
+def get_database_url():
+    # 1. Intenta leer desde los Secrets de Streamlit Cloud
+    if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
+        return st.secrets["DATABASE_URL"]
+
+    # 2. Si no existe en Secrets, lee el .env / pass.env local
+    return os.getenv("DATABASE_URL")
+
+
 @st.cache_resource(ttl=60)
 def init_connection():
     db_url = get_database_url()
     if not db_url:
         st.error(
-            "⚠️ **Error de Credenciales:** Variable `DATABASE_URL` no encontrada. "
-            "Si estás en Streamlit Cloud, revisá la sección Secrets de la app. "
-            "Si estás en tu PC, revisá tu archivo pass.env."
+            "⚠️ **Error de Credenciales:** Variable `DATABASE_URL` no encontrada "
+            "ni en pass.env ni en Secrets de Streamlit."
         )
         st.stop()
-    return psycopg2.connect(db_url, connect_timeout=10)
-
-
-def get_connection_segura():
-    """
-    Devuelve una conexión válida a la base, reintentando una vez si la
-    conexión cacheada está muerta (por ejemplo, Supabase se cayó y volvió
-    dentro de la ventana de 60s del cache).
-    """
-    conn = init_connection()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1;")
-        return conn
-    except Exception:
-        st.warning("🔄 Conexión perdida con la base. Reintentando...")
-        init_connection.clear()
-        return init_connection()
+    return psycopg2.connect(db_url)
 
 
 # ==============================================================================
