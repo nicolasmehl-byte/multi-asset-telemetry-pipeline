@@ -266,11 +266,9 @@ def render_live_monitoring():
             with st.container():
                 # 🕒 Tiempo transcurrido
                 last_update = pd.to_datetime(row["timestamp"])
-                now = (
-                    pd.Timestamp.now(tz=last_update.tz)
-                    if last_update.tzinfo is not None
-                    else pd.Timestamp.now()
-                )
+                if last_update.tzinfo is None:
+                    last_update = last_update.tz_localize("UTC")
+                now = pd.Timestamp.now(tz=last_update.tz)
                 segundos_sin_datos = (now - last_update).total_seconds()
 
                 # 🧹 Sanitización defensiva

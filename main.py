@@ -3,6 +3,7 @@ import logging
 import time  # Librería nativa para manejar las esperas y tiempos (sleep).
 from datetime import (
     datetime,  # Librería nativa para capturar la fecha y hora exacta del sistema de la PC.
+    timezone,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -26,7 +27,7 @@ def main():
             True
         ):  # "Mientras sea Verdadero" -> Un bucle infinito. El programa correrá para siempre.
 
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
             for machine_name, net_config in config.EQUIPMENT.items():
 
