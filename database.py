@@ -1,14 +1,19 @@
 # database.py
 import logging
-import os
 import sqlite3
 
-import psycopg2
+from db_connection import get_cloud_connection
 
 logger = logging.getLogger(__name__)
 
 # Nombre del archivo de base de datos local (se creará en la misma carpeta)
 DB_LOCAL_NAME = "backup_mantenimiento.db"
+
+# Cuántas filas pendientes subimos por tanda al sincronizar.
+# Si el backup local acumuló miles de filas (por un corte largo de varios días),
+# traer todo de una con fetchall() cargaría demasiada memoria de golpe.
+# Subiendo de a lotes, el programa sigue respondiendo aunque haya mucho pendiente.
+SYNC_BATCH_SIZE = 100
 
 
 def inicializar_base_local():
@@ -57,31 +62,53 @@ def guardar_en_local(machine_name, data, timestamp):
             machine_name,
         )
     except Exception as e:
-        logger.error("❌ Error crítico al escribir en SQLite local: %s", e)
+        # Logueamos también el contenido de "data": si falta una clave (KeyError),
+        # ver el diccionario completo ayuda a detectar rápido qué vino mal formado
+        # desde communication.py, en vez de solo ver "Error crítico" sin contexto.
+        logger.error(
+            "❌ Error crítico al escribir en SQLite local. Datos recibidos: %s | Error: %s",
+            data,
+            e,
+        )
 
 
-def sincronizar_datos_pendientes(db_url):
-    """Busca si hay datos acumulados en SQLite y los sube uno a uno a Supabase."""
+def _traer_lote_pendiente(cursor_local, batch_size):
+    """Trae un lote (no todo de una) de filas pendientes de sincronizar."""
+    cursor_local.execute(
+        """SELECT id, timestamp, machine_name, pressure_bar, temperature_c, run_hours, current_amps
+           FROM telemetria_backup
+           LIMIT ?""",
+        (batch_size,),
+    )
+    return cursor_local.fetchall()
+
+
+def sincronizar_datos_pendientes():
+    """
+    Busca si hay datos acumulados en SQLite y los sube a Supabase en lotes.
+
+    Antes se traían TODAS las filas pendientes de una sola vez con fetchall().
+    Si el backup local creció mucho (por ejemplo, varios días sin red), eso podía
+    cargar miles de filas en memoria de golpe. Ahora se procesa de a
+    SYNC_BATCH_SIZE filas por vuelta, abriendo una sola conexión a la nube por lote.
+    """
     conn_local = sqlite3.connect(DB_LOCAL_NAME)
     cursor_local = conn_local.cursor()
-    cursor_local.execute(
-        "SELECT id, timestamp, machine_name, pressure_bar, temperature_c, run_hours, current_amps FROM telemetria_backup"
-    )
-    filas_pendientes = cursor_local.fetchall()
+
+    filas_pendientes = _traer_lote_pendiente(cursor_local, SYNC_BATCH_SIZE)
 
     if not filas_pendientes:
         conn_local.close()
         return  # No hay nada viejo acumulado, salimos directo
 
     logger.info(
-        "🔄 [SINCRONIZACIÓN] Detectadas %s lecturas pendientes en la notebook. Intentando subir...",
+        "🔄 [SINCRONIZACIÓN] Subiendo lote de %s lecturas pendientes de la notebook...",
         len(filas_pendientes),
     )
 
     conn_cloud = None
     try:
-        # Intentamos abrir una única conexión a la nube para pasar la tanda
-        conn_cloud = get_cloud_connection(db_url)
+        conn_cloud = get_cloud_connection()
         cursor_cloud = conn_cloud.cursor()
 
         query_cloud = """
@@ -100,7 +127,6 @@ def sincronizar_datos_pendientes(db_url):
                 current,
             ) = fila
             try:
-                # Insertamos en la nube
                 cursor_cloud.execute(
                     query_cloud,
                     (
@@ -146,35 +172,13 @@ def sincronizar_datos_pendientes(db_url):
         conn_local.close()
 
 
-def get_cloud_connection(db_url=None):
-    """Establece una conexión con la base cloud usando variables de entorno.
-
-    Si no hay variables definidas, usa los valores por defecto que había hardcodeados.
-    """
-    host = os.getenv("DB_HOST", "aws-1-sa-east-1.pooler.supabase.com")
-    port = int(os.getenv("DB_PORT", "6543"))
-    database = os.getenv("DB_NAME", "postgres")
-    user = os.getenv("DB_USER", "postgres.bmuchkgxvcggummezhhh")
-    password = os.getenv("DB_PASSWORD")
-    sslmode = os.getenv("DB_SSLMODE", "require")
-
-    return psycopg2.connect(
-        host=host,
-        port=port,
-        database=database,
-        user=user,
-        password=password,
-        sslmode=sslmode,
-    )
-
-
-def init_db(db_url):
+def init_db():
     """
     Verifica la conexión al arrancar.
     Si no hay internet, evita que el script se muera y avisa que inicia en modo offline.
     """
     try:
-        connection = get_cloud_connection(db_url)
+        connection = get_cloud_connection()
         cursor = connection.cursor()
         cursor.execute("SELECT version();")
         db_version = cursor.fetchone()
@@ -191,12 +195,12 @@ def init_db(db_url):
         )
 
 
-def save_reading(db_url, machine_name, data, timestamp):
+def save_reading(machine_name, data, timestamp):
     """Inserta un registro en PostgreSQL. Si falla el Wi-Fi, lo respalda localmente."""
 
     # 1. Antes de mandar el dato nuevo, intentamos vaciar el galpón de datos pendientes
     try:
-        sincronizar_datos_pendientes(db_url)
+        sincronizar_datos_pendientes()
     except Exception as e:
         logger.warning("⚠️ Error en proceso secundario de sincronización: %s", e)
 
@@ -208,7 +212,7 @@ def save_reading(db_url, machine_name, data, timestamp):
 
     connection = None
     try:
-        connection = get_cloud_connection(db_url)
+        connection = get_cloud_connection()
         cursor = connection.cursor()
 
         cursor.execute(

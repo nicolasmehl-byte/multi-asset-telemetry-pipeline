@@ -25,6 +25,12 @@ def read_machine_data(host, port=None, start_address=None):
         unit_id=getattr(config, "MODBUS_SLAVE_ID", 1),
         auto_open=True,
         auto_close=True,
+        # Sin timeout explícito, pyModbusTCP espera hasta ~30s por defecto antes
+        # de darse por vencido. Con varios equipos y polling cada 10s, una sola
+        # máquina caída podía atrasar la lectura de las demás en el mismo ciclo.
+        # Con MODBUS_TIMEOUT (2s por defecto) el programa detecta rápido que
+        # está offline y sigue de largo.
+        timeout=getattr(config, "MODBUS_TIMEOUT", 2.0),
     )
 
     try:
@@ -43,7 +49,8 @@ def read_machine_data(host, port=None, start_address=None):
         return None
 
     try:
-        # Reconstruimos 32 bits para horas de marcha
+        # Reconstruimos 32 bits para horas de marcha combinando dos registros de 16 bits:
+        # (parte_alta << 16) + parte_baja. Ver config.py para los índices exactos.
         run_hours = (registers[config.IDX_RUN_HOURS_HIGH] << 16) + registers[
             config.IDX_RUN_HOURS_LOW
         ]

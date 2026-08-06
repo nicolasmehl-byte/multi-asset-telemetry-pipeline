@@ -17,31 +17,27 @@ def main():
     logger = logging.getLogger(__name__)
     logger.info("--- Starting Multi-Asset IIoT Data Logger (Cloud Mode) ---")
 
-    # LLAMADA CORREGIDA: Pasamos la URL cloud de config.py para verificar la conexión a internet al arrancar.
-    init_db(config.DATABASE_URL)
+    # init_db ya no recibe db_url: la conexión se arma internamente
+    # leyendo DATABASE_URL desde el entorno (ver db_connection.py).
+    init_db()
 
-    # Usamos un bloque "try / except" (intentar / capturar excepción).
-    # Sirve para atrapar errores o acciones del usuario y evitar que el programa se cierre con un cartel de error feo.
     try:
         while (
             True
         ):  # "Mientras sea Verdadero" -> Un bucle infinito. El programa correrá para siempre.
 
-            # Capturamos el momento exacto en el formato estándar: Año-Mes-Día Hora:Minuto:Segundo.
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-            # Recorremos el diccionario EQUIPMENT que está en config.py.
-            # .items() nos desarma el diccionario en parejas: machine_name (la clave) y net_config (los datos de adentro).
             for machine_name, net_config in config.EQUIPMENT.items():
 
-                # Le pedimos al módulo de comunicación que vaya a buscar los datos de la máquina actual
                 sensor_data = read_machine_data(
                     net_config["host"], net_config["port"], net_config["start_address"]
                 )
 
-                # Si la máquina respondió bien (sensor_data no está vacío):
                 if sensor_data:
-                    # 🛡️ ESCUDO SANITARIO: Protegemos la base de datos contra números basura del simulador
+                    # 🛡️ ESCUDO SANITARIO: Protegemos la base de datos contra números basura del simulador.
+                    # 99999999.0 es un valor centinela típico que devuelven simuladores/PLCs cuando
+                    # el registro Modbus todavía no fue inicializado con un valor real.
                     if (
                         sensor_data.get("run_hours")
                         and sensor_data["run_hours"] > 99999999.0
@@ -52,12 +48,9 @@ def main():
                             sensor_data["run_hours"],
                         )
                         sensor_data["run_hours"] = 0.0
-                    # CORREGIDO: Reemplazamos config.DB_NAME por config.DATABASE_URL para insertar en la nube
-                    save_reading(
-                        config.DATABASE_URL, machine_name, sensor_data, current_time
-                    )
 
-                    # Mostramos un reporte limpio en la consola para el operario que mira la pantalla.
+                    save_reading(machine_name, sensor_data, current_time)
+
                     logger.info(
                         "[%s] %s -> Presion: %s Bar | Temp: %s °C | Hrs: %s h | I: %s A",
                         current_time,
@@ -69,7 +62,6 @@ def main():
                     )
                 else:
                     # CAMINO DEFENSIVO: La máquina no respondió.
-                    # Armamos un diccionario con valores None (que Postgres guardará como NULL).
                     offline_data = {
                         "pressure_bar": None,
                         "temperature_c": None,
@@ -77,11 +69,8 @@ def main():
                         "current_amps": None,
                     }
 
-                    save_reading(
-                        config.DATABASE_URL, machine_name, offline_data, current_time
-                    )
+                    save_reading(machine_name, offline_data, current_time)
 
-                    # Avisamos con una alerta visual en la consola de la planta.
                     logger.warning(
                         "[%s] ⚠️ ALERT: %s is OFFLINE. Failure logged. Retrying next cycle in %s seconds...",
                         current_time,
@@ -89,18 +78,13 @@ def main():
                         config.POLLING_INTERVAL,
                     )
 
-            logger.info(
-                "%s", "-" * 70
-            )  # Imprime una línea separadora estética cada vez que termina de escanear toda la planta.
+            logger.info("%s", "-" * 70)
 
-            # Duerme el programa los segundos configurados en config.py para no saturar el procesador de la PC.
             time.sleep(config.POLLING_INTERVAL)
 
     except KeyboardInterrupt:
-        # Si el usuario aprieta CTRL + C en la terminal, Python frena el "try" y salta directo acá.
         logger.info("Logger execution stopped by user. Exiting safely...")
 
 
-# Si el usuario ejecutó este archivo directamente (py main.py), arrancá ejecutando la función main().
 if __name__ == "__main__":
     main()

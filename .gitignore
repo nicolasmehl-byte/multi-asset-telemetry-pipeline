@@ -1,5 +1,6 @@
 # Credenciales y variables de entorno 
 .env
+.venv/
 pass.env
 borrar_id4.py
 iniciar_programa.bat
@@ -9,3 +10,7 @@ __pycache__/
 
 # Bases de datos locales (SQLite) 
 *.db
+## Archivos de configuración de Streamlit 
+.streamlit/secrets.toml
+
+
