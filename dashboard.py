@@ -177,7 +177,7 @@ def init_connection():
 # ==============================================================================
 @st.cache_data(ttl=5)
 def get_latest_data():
-    conn = get_connection_segura()
+    conn = init_connection()
     query = """
     SELECT DISTINCT ON (UPPER(TRIM(machine_name))) 
         UPPER(TRIM(machine_name)) as machine_name, timestamp, pressure_bar, temperature_c, run_hours, current_amps
@@ -198,7 +198,7 @@ def get_latest_data():
 
 @st.cache_data(ttl=15)
 def get_historical_data(machine):
-    conn = get_connection_segura()
+    conn = init_connection()
     query = """
     SELECT timestamp, pressure_bar, temperature_c, current_amps
     FROM historical_telemetry
