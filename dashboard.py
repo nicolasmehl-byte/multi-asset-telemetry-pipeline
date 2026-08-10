@@ -85,50 +85,18 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# SELECCIÓN DE TEMA DINÁMICO EN EL SIDEBAR
+# MODO OSCURO FIJO
 # ==============================================================================
-with st.sidebar:
-    st.header("🎨 Personalización")
-    tema_seleccionado = st.radio(
-        "Modo de Visualización:",
-        ["🌙 Oscuro", "☀️ Claro ", "🎨 Personalizado"],
-        index=0,
-    )
-
-    if tema_seleccionado == "🌙 Oscuro SCADA":
-        bg_color = "#0E1117"
-        card_bg = "#161B22"
-        card_border = "#30363D"
-        text_color = "#E0E6ED"
-        text_muted = "#8B949E"
-        metric_color = "#58A6FF"
-        gauge_track = "#21262D"
-        plotly_theme = "plotly_dark"
-        grid_color = "#21262D"
-
-    elif tema_seleccionado == "☀️ Claro Industrial":
-        bg_color = "#F8FAFC"
-        card_bg = "#FFFFFF"
-        card_border = "#CBD5E1"
-        text_color = "#0F172A"  # Oscuro para legibilidad total
-        text_muted = "#475569"
-        metric_color = "#1D4ED8"
-        gauge_track = "#E2E8F0"
-        plotly_theme = "plotly_white"
-        grid_color = "#E2E8F0"
-
-    else:  # 🎨 Personalizado
-        bg_color = st.color_picker(
-            "Color de fondo principal:", "#1E293B", key="picker_bg"
-        )
-        card_bg = st.color_picker("Color de tarjetas:", "#0F172A", key="picker_card")
-        card_border = "#475569"
-        text_color = "#F8FAFC"
-        text_muted = "#94A3B8"
-        metric_color = "#38BDF8"
-        gauge_track = "#334155"
-        plotly_theme = "plotly_dark"
-        grid_color = "#334155"
+tema_seleccionado = "🌙 Oscuro SCADA"
+bg_color = "#0E1117"
+card_bg = "#161B22"
+card_border = "#30363D"
+text_color = "#FFFFFF"
+text_muted = "#94A3B8"
+metric_color = "#58A6FF"
+gauge_track = "#21262D"
+plotly_theme = "plotly_dark"
+grid_color = "#21262D"
 
 # ==============================================================================
 # 2. INYECCIÓN DE ESTILOS CSS
@@ -553,11 +521,7 @@ def render_live_monitoring():
                             press if press is not None else 0.0,
                             "Presión",
                             15,
-                            (
-                                "#00E676"
-                                if tema_seleccionado == "🌙 Oscuro SCADA"
-                                else "#059669"
-                            ),
+                            "#00E676",
                             "Bar",
                             text_color,
                             gauge_track,
@@ -572,11 +536,7 @@ def render_live_monitoring():
                             temp if temp is not None else 0.0,
                             "Temperatura",
                             100,
-                            (
-                                "#FF5252"
-                                if tema_seleccionado == "🌙 Oscuro SCADA"
-                                else "#DC2626"
-                            ),
+                            "#FF5252",
                             "°C",
                             text_color,
                             gauge_track,
