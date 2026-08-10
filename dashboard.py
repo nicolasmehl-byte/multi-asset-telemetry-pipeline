@@ -219,14 +219,14 @@ with st.sidebar:
                 try:
                     # Ejecutar una consulta mínima inline para evitar depender de
                     # funciones que podrían definirse más abajo en este archivo.
+                    # Abrir una conexión nueva para debug (no usar la conexión
+                    # cacheada por `init_connection()` ya que esa instancia
+                    # podría ser compartida por la app y no debe cerrarse aquí).
                     conn_dbg = None
                     try:
-                        conn_dbg = init_connection()
+                        conn_dbg = psycopg2.connect(db_url, connect_timeout=5)
                     except Exception as e_conn:
-                        st.error(
-                            f"No se pudo inicializar conexión para debug: {e_conn}"
-                        )
-                        conn_dbg = None
+                        st.error(f"No se pudo abrir conexión debug directa: {e_conn}")
 
                     if conn_dbg is None:
                         st.warning(
@@ -372,7 +372,10 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
 @st.fragment(run_every=10)
 def render_live_monitoring():
     df_latest = get_latest_data()
-    TIMEOUT_DESCONEXION = 30
+    # Tiempo (segundos) que consideramos para marcar pérdida de comunicación.
+    # Valor por defecto aumentado a 200s; puede sobreescribirse desde el entorno
+    # con la variable TIMEOUT_DESCONEXION.
+    TIMEOUT_DESCONEXION = int(os.getenv("TIMEOUT_DESCONEXION", "200"))
 
     if not df_latest.empty:
         for index, row in df_latest.iterrows():
