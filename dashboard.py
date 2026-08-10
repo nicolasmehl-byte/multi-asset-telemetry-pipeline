@@ -217,37 +217,66 @@ with st.sidebar:
 
                 # Estado detallado por activo (timestamps y segundos desde última telemetría)
                 try:
-                    df_dbg = get_latest_data()
-                    if df_dbg is None or df_dbg.empty:
+                    # Ejecutar una consulta mínima inline para evitar depender de
+                    # funciones que podrían definirse más abajo en este archivo.
+                    conn_dbg = None
+                    try:
+                        conn_dbg = init_connection()
+                    except Exception as e_conn:
+                        st.error(
+                            f"No se pudo inicializar conexión para debug: {e_conn}"
+                        )
+                        conn_dbg = None
+
+                    if conn_dbg is None:
                         st.warning(
-                            "No hay filas recientes en la tabla historical_telemetry"
+                            "No se pudo abrir conexión para obtener estado de activos"
                         )
                     else:
-                        now_utc = pd.Timestamp.now(tz="UTC")
-                        rows = []
-                        for _, r in df_dbg.iterrows():
-                            ts = (
-                                pd.to_datetime(r["timestamp"])
-                                if pd.notna(r["timestamp"])
-                                else None
+                        query_dbg = """
+                        SELECT DISTINCT ON (UPPER(TRIM(machine_name)))
+                            UPPER(TRIM(machine_name)) as machine_name, timestamp, current_amps
+                        FROM historical_telemetry
+                        ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
+                        """
+                        df_dbg = pd.read_sql(query_dbg, conn_dbg)
+                        try:
+                            conn_dbg.close()
+                        except Exception:
+                            pass
+
+                        if df_dbg is None or df_dbg.empty:
+                            st.warning(
+                                "No hay filas recientes en la tabla historical_telemetry"
                             )
-                            if ts is not None and ts.tzinfo is None:
-                                ts = ts.tz_localize(DATA_TIMEZONE)
-                            diff_sec = None
-                            if ts is not None:
-                                diff_sec = (
-                                    now_utc - ts.astimezone("UTC")
-                                ).total_seconds()
-                            rows.append(
-                                {
-                                    "machine": r["machine_name"],
-                                    "timestamp": str(ts),
-                                    "tz": str(ts.tzinfo) if ts is not None else None,
-                                    "current_amps": r.get("current_amps"),
-                                    "seconds_since": diff_sec,
-                                }
-                            )
-                        st.table(pd.DataFrame(rows))
+                        else:
+                            now_utc = pd.Timestamp.now(tz="UTC")
+                            rows = []
+                            for _, r in df_dbg.iterrows():
+                                ts = (
+                                    pd.to_datetime(r["timestamp"])
+                                    if pd.notna(r["timestamp"])
+                                    else None
+                                )
+                                if ts is not None and ts.tzinfo is None:
+                                    ts = ts.tz_localize(DATA_TIMEZONE)
+                                diff_sec = None
+                                if ts is not None:
+                                    diff_sec = (
+                                        now_utc - ts.astimezone("UTC")
+                                    ).total_seconds()
+                                rows.append(
+                                    {
+                                        "machine": r["machine_name"],
+                                        "timestamp": str(ts),
+                                        "tz": (
+                                            str(ts.tzinfo) if ts is not None else None
+                                        ),
+                                        "current_amps": r.get("current_amps"),
+                                        "seconds_since": diff_sec,
+                                    }
+                                )
+                            st.table(pd.DataFrame(rows))
                 except Exception as e:
                     st.error(f"Error al calcular estado por activo: {e}")
 
