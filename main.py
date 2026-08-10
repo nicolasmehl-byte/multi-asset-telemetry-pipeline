@@ -1,10 +1,11 @@
 # main.py
 import logging
+import os
 import time  # Librería nativa para manejar las esperas y tiempos (sleep).
 from datetime import (
     datetime,  # Librería nativa para capturar la fecha y hora exacta del sistema de la PC.
-    timezone,
 )
+from zoneinfo import ZoneInfo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -12,6 +13,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 import config
 from communication import read_machine_data
 from database import init_db, save_reading
+
+DATA_TIMEZONE = ZoneInfo(os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires"))
 
 
 def main():
@@ -27,7 +30,7 @@ def main():
             True
         ):  # "Mientras sea Verdadero" -> Un bucle infinito. El programa correrá para siempre.
 
-            current_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            current_time = datetime.now(DATA_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
 
             for machine_name, net_config in config.EQUIPMENT.items():
 

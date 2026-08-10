@@ -1,4 +1,5 @@
 import os
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -124,39 +125,26 @@ RUTA_ENV = os.path.join(BASE_DIR, "pass.env")
 # Si pass.env no existe (por ejemplo, en Streamlit Cloud, donde nunca se sube
 # por seguridad), load_dotenv simplemente no hace nada y no tira error.
 load_dotenv(RUTA_ENV)
+DATA_TIMEZONE = ZoneInfo(os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires"))
 
 
 def get_database_url():
     """
-    Obtiene la cadena de conexión a la base de datos, funcionando en los dos
-    entornos donde puede correr este dashboard:
+    Obtiene la cadena de conexión a la base de datos desde Streamlit Cloud o
+    desde el entorno local.
 
-    1. Streamlit Community Cloud: no existe pass.env ahí (nunca se sube al
-       repo). Streamlit Cloud tiene su propio sistema de "Secrets" que se
-       configura desde su panel web y se lee acá con st.secrets.
-    2. Tu PC local: pass.env sí existe, load_dotenv ya lo cargó arriba, y la
-       variable está disponible con os.getenv normal.
-
-    Probamos primero st.secrets (funciona en la nube); si no está disponible
-    (estamos corriendo local, sin carpeta .streamlit/secrets.toml), caemos a
-    la variable de entorno cargada desde pass.env.
+    - En Streamlit Cloud: usa st.secrets["DATABASE_URL"] cuando se configuró.
+    - En local: usa la variable de entorno cargada desde pass.env.
     """
     try:
-        return st.secrets["DATABASE_URL"]
+        # Acceder a st.secrets puede fallar cuando no existe ningún secrets.toml.
+        db_url = st.secrets.get("DATABASE_URL")
     except Exception:
-        return os.getenv("DATABASE_URL")
+        db_url = None
 
+    if db_url:
+        return db_url
 
-# ==============================================================================
-# ==============================================================================
-# 4. CONEXIÓN OPTIMIZADA A BASE DE DATOS (HÍBRIDA LOCAL / CLOUD)
-# ==============================================================================
-def get_database_url():
-    # 1. Intenta leer desde los Secrets de Streamlit Cloud
-    if hasattr(st, "secrets") and "DATABASE_URL" in st.secrets:
-        return st.secrets["DATABASE_URL"]
-
-    # 2. Si no existe en Secrets, lee el .env / pass.env local
     return os.getenv("DATABASE_URL")
 
 
@@ -170,6 +158,62 @@ def init_connection():
         )
         st.stop()
     return psycopg2.connect(db_url)
+
+
+# ---------------------------------------------------------------------------
+# Debug: panel seguro (no muestra credenciales) para verificar origen DB
+# Se muestra solo si el usuario marca la casilla en el sidebar.
+# ---------------------------------------------------------------------------
+def _mask_host_port_from_url(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+
+        p = urlparse(url)
+        host = p.hostname or ""
+        port = p.port or ""
+        if host:
+            return f"{host}:{port}"
+        return "(unknown)"
+    except Exception:
+        return "(invalid)"
+
+
+with st.sidebar:
+    with st.expander("🔧 Debug DB (solo admin)", expanded=False):
+        show_db_debug = st.checkbox("Mostrar info de conexión (segura)", key="debug_db")
+        if show_db_debug:
+            db_url = None
+            try:
+                # Intentamos leer el secret sin lanzar si no existe
+                db_url = (
+                    st.secrets.get("DATABASE_URL") if hasattr(st, "secrets") else None
+                )
+            except Exception:
+                db_url = None
+
+            if not db_url:
+                db_url = os.getenv("DATABASE_URL")
+
+            if not db_url:
+                st.warning("DATABASE_URL no configurada en st.secrets ni en pass.env")
+            else:
+                src = (
+                    "st.secrets"
+                    if (hasattr(st, "secrets") and st.secrets.get("DATABASE_URL"))
+                    else "pass.env / env"
+                )
+                st.info(f"Fuente: {src}")
+                st.write("Host:Port:", _mask_host_port_from_url(db_url))
+
+                # Test de conexión (rápido y no muestra la URL completa)
+                try:
+                    conn = psycopg2.connect(db_url, connect_timeout=5)
+                    conn.close()
+                    st.success("Conexión a la base: OK")
+                except Exception as e:
+                    st.error(
+                        f"Conexión fallida: {e.__class__.__name__}: {str(e)[:150]}"
+                    )
 
 
 # ==============================================================================
@@ -187,6 +231,8 @@ def get_latest_data():
     df = pd.read_sql(query, conn)
 
     if not df.empty:
+        if df["timestamp"].dt.tz is None:
+            df["timestamp"] = df["timestamp"].dt.tz_localize(DATA_TIMEZONE)
         df["machine_name"] = pd.Categorical(
             df["machine_name"], categories=ORDEN_PLANTA, ordered=True
         )
@@ -209,6 +255,8 @@ def get_historical_data(machine):
     df = pd.read_sql(query, conn, params=(machine,))
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
+        if df["timestamp"].dt.tz is None:
+            df["timestamp"] = df["timestamp"].dt.tz_localize(DATA_TIMEZONE)
         df = df.sort_values("timestamp")
     return df
 
@@ -267,9 +315,11 @@ def render_live_monitoring():
                 # 🕒 Tiempo transcurrido
                 last_update = pd.to_datetime(row["timestamp"])
                 if last_update.tzinfo is None:
-                    last_update = last_update.tz_localize("UTC")
-                now = pd.Timestamp.now(tz=last_update.tz)
-                segundos_sin_datos = (now - last_update).total_seconds()
+                    last_update = last_update.tz_localize(DATA_TIMEZONE)
+                now = pd.Timestamp.now(tz="UTC")
+                segundos_sin_datos = (
+                    now - last_update.astimezone("UTC")
+                ).total_seconds()
 
                 # 🧹 Sanitización defensiva
                 amps = row["current_amps"] if pd.notna(row["current_amps"]) else None
