@@ -215,6 +215,42 @@ with st.sidebar:
                         f"Conexión fallida: {e.__class__.__name__}: {str(e)[:150]}"
                     )
 
+                # Estado detallado por activo (timestamps y segundos desde última telemetría)
+                try:
+                    df_dbg = get_latest_data()
+                    if df_dbg is None or df_dbg.empty:
+                        st.warning(
+                            "No hay filas recientes en la tabla historical_telemetry"
+                        )
+                    else:
+                        now_utc = pd.Timestamp.now(tz="UTC")
+                        rows = []
+                        for _, r in df_dbg.iterrows():
+                            ts = (
+                                pd.to_datetime(r["timestamp"])
+                                if pd.notna(r["timestamp"])
+                                else None
+                            )
+                            if ts is not None and ts.tzinfo is None:
+                                ts = ts.tz_localize(DATA_TIMEZONE)
+                            diff_sec = None
+                            if ts is not None:
+                                diff_sec = (
+                                    now_utc - ts.astimezone("UTC")
+                                ).total_seconds()
+                            rows.append(
+                                {
+                                    "machine": r["machine_name"],
+                                    "timestamp": str(ts),
+                                    "tz": str(ts.tzinfo) if ts is not None else None,
+                                    "current_amps": r.get("current_amps"),
+                                    "seconds_since": diff_sec,
+                                }
+                            )
+                        st.table(pd.DataFrame(rows))
+                except Exception as e:
+                    st.error(f"Error al calcular estado por activo: {e}")
+
 
 # ==============================================================================
 # 5. FUNCIONES DE EXTRACCIÓN DE DATOS
