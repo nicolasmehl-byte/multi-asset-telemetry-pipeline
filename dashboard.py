@@ -16,13 +16,72 @@ umbral_current_OFF = (
 )
 
 # ORDEN VISUAL DE LA PLANTA (Primero compresores, al final Chiller)
-ORDEN_PLANTA = ["AERCOM_22P", "SULLAIR_COMPRESSOR", "CHILLER_TRANE"]
+MACHINE_DISPLAY_LABEL = {
+    "AERCOM_22P": "Aercom Compresor",
+    "SULLAIR_COMPRESSOR": "Sullair Compresor",
+    "CHILLER_TRANE": "Chiller Trane",
+}
+MACHINE_ALERT_KEY = {
+    "AERCOM_22P": "AERCOM 22P",
+    "SULLAIR_COMPRESSOR": "SULLAIR SE1507NEW",
+    "CHILLER_TRANE": "CHILLER TRANE CGAX030",
+}
+ORDEN_PLANTA_KEYS = ["AERCOM_22P", "SULLAIR_COMPRESSOR", "CHILLER_TRANE"]
+ORDEN_PLANTA = [MACHINE_DISPLAY_LABEL[key] for key in ORDEN_PLANTA_KEYS]
+
+# COTAS DE ADVERTENCIA PREVENTIVA (ALERTAS PREVIAS A FALLA)
+PREVENTIVE_ALERTS = {
+    "AERCOM 22P": {
+        "max_temp": 95.0,  # °C (Alerta de alta temperatura)
+        "min_temp": 65.0,  # °C (Alerta de temperatura baja / condensación)
+        "max_press": 10.0,  # bar (Alerta de alta presión)
+        "max_amps": 46.0,  # A (Alerta de sobrecarga)
+    },
+    "SULLAIR SE1507NEW": {
+        "max_temp": 95.0,
+        "min_temp": 65.0,
+        "max_press": 9.5,
+        "max_amps": 25.0,
+    },
+    "CHILLER TRANE CGAX030": {
+        "max_temp": 12.0,  # °C (Agua caliente / bajo rendimiento)
+        "min_temp": 4.5,  # °C (Alerta anti-congelamiento)
+        "max_press": 27.0,  # bar (Alta presión de condensación)
+        "min_press": 6.5,  # bar (Baja presión / falta de gas)
+        "max_amps": 32.0,  # A (Sobrecarga de corriente)
+    },
+}
+
+DEFAULT_PREVENTIVE_ALERTS = {
+    "max_temp": 95.0,
+    "min_temp": 65.0,
+    "max_press": 10.0,
+    "min_press": None,
+    "max_amps": 46.0,
+}
+
+
+def get_preventive_alerts(alert_key: str) -> dict:
+    thresholds = PREVENTIVE_ALERTS.get(alert_key, DEFAULT_PREVENTIVE_ALERTS)
+    # Garantizar todas las claves están presentes.
+    return {
+        "max_temp": thresholds.get("max_temp", DEFAULT_PREVENTIVE_ALERTS["max_temp"]),
+        "min_temp": thresholds.get("min_temp", DEFAULT_PREVENTIVE_ALERTS["min_temp"]),
+        "max_press": thresholds.get(
+            "max_press", DEFAULT_PREVENTIVE_ALERTS["max_press"]
+        ),
+        "min_press": thresholds.get(
+            "min_press", DEFAULT_PREVENTIVE_ALERTS["min_press"]
+        ),
+        "max_amps": thresholds.get("max_amps", DEFAULT_PREVENTIVE_ALERTS["max_amps"]),
+    }
+
 
 # ==============================================================================
 # 1. CONFIGURACIÓN DE PÁGINA (¡Restaurada!)
 # ==============================================================================
 st.set_page_config(
-    page_title="Monitoreo Industrial IIoT", page_icon="🏭", layout="wide"
+    page_title="Monitoreo Industrial Beniplast IIoT", page_icon="🏭", layout="wide"
 )
 
 # ==============================================================================
@@ -32,7 +91,7 @@ with st.sidebar:
     st.header("🎨 Personalización")
     tema_seleccionado = st.radio(
         "Modo de Visualización:",
-        ["🌙 Oscuro SCADA", "☀️ Claro Industrial", "🎨 Personalizado"],
+        ["🌙 Oscuro", "☀️ Claro ", "🎨 Personalizado"],
         index=0,
     )
 
@@ -265,9 +324,12 @@ with st.sidebar:
                                     diff_sec = (
                                         now_utc - ts.astimezone("UTC")
                                     ).total_seconds()
+                                machine_label = MACHINE_DISPLAY_LABEL.get(
+                                    r["machine_name"], r["machine_name"]
+                                )
                                 rows.append(
                                     {
-                                        "machine": r["machine_name"],
+                                        "machine": machine_label,
                                         "timestamp": str(ts),
                                         "tz": (
                                             str(ts.tzinfo) if ts is not None else None
@@ -289,7 +351,7 @@ def get_latest_data():
     conn = init_connection()
     query = """
     SELECT DISTINCT ON (UPPER(TRIM(machine_name))) 
-        UPPER(TRIM(machine_name)) as machine_name, timestamp, pressure_bar, temperature_c, run_hours, current_amps
+        UPPER(TRIM(machine_name)) as machine_key, timestamp, pressure_bar, temperature_c, run_hours, current_amps
     FROM historical_telemetry
     ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
     """
@@ -298,11 +360,17 @@ def get_latest_data():
     if not df.empty:
         if df["timestamp"].dt.tz is None:
             df["timestamp"] = df["timestamp"].dt.tz_localize(DATA_TIMEZONE)
-        df["machine_name"] = pd.Categorical(
-            df["machine_name"], categories=ORDEN_PLANTA, ordered=True
+        df["machine_key"] = pd.Categorical(
+            df["machine_key"], categories=ORDEN_PLANTA_KEYS, ordered=True
         )
-        df = df.sort_values("machine_name").reset_index(drop=True)
-        df["machine_name"] = df["machine_name"].astype(str)
+        df = df.sort_values("machine_key").reset_index(drop=True)
+        df["machine_key"] = df["machine_key"].astype(str)
+        df["machine_label"] = (
+            df["machine_key"].map(MACHINE_DISPLAY_LABEL).fillna(df["machine_key"])
+        )
+        df["machine_alert_key"] = (
+            df["machine_key"].map(MACHINE_ALERT_KEY).fillna(df["machine_key"])
+        )
 
     return df
 
@@ -424,7 +492,7 @@ def render_live_monitoring():
                 # 🗂️ ENCABEZADO DE ACTIVO
                 col_header_title, col_header_status = st.columns([3, 1])
                 with col_header_title:
-                    st.markdown(f"### ⚙️ {row['machine_name']}")
+                    st.markdown(f"### ⚙️ {row['machine_label']}")
                 with col_header_status:
                     st.markdown(
                         f"<div style='text-align: right; margin-top: 5px;'>{status_badge}</div>",
@@ -438,13 +506,31 @@ def render_live_monitoring():
                     )
                 else:
                     alert_messages = []
-                    if temp is not None and temp > umbral_temp:
+                    thresholds = get_preventive_alerts(row["machine_alert_key"])
+                    if temp is not None:
+                        if temp > thresholds["max_temp"]:
+                            alert_messages.append(
+                                f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
+                            )
+                        elif temp < thresholds["min_temp"]:
+                            alert_messages.append(
+                                f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
+                            )
+                    if press is not None:
+                        if (
+                            thresholds["min_press"] is not None
+                            and press < thresholds["min_press"]
+                        ):
+                            alert_messages.append(
+                                f"Presión baja: {press} Bar (Umbral: <{thresholds['min_press']} Bar)"
+                            )
+                        elif press > thresholds["max_press"]:
+                            alert_messages.append(
+                                f"Alta Presión: {press} Bar (Umbral: >{thresholds['max_press']} Bar)"
+                            )
+                    if amps is not None and amps > thresholds["max_amps"]:
                         alert_messages.append(
-                            f"Alta Temperatura: {temp} °C (Umbral: >{umbral_temp}°C)"
-                        )
-                    if press is not None and press > umbral_pressure:
-                        alert_messages.append(
-                            f"Alta Presión: {press} Bar (Umbral: >{umbral_pressure} Bar)"
+                            f"Sobrecarga de corriente: {amps} A (Umbral: >{thresholds['max_amps']} A)"
                         )
 
                     if alert_messages:
@@ -477,7 +563,7 @@ def render_live_monitoring():
                             gauge_track,
                         ),
                         use_container_width=True,
-                        key=f"live_p_{row['machine_name']}",
+                        key=f"live_p_{row['machine_key']}",
                     )
 
                 with col_temp:
@@ -496,7 +582,7 @@ def render_live_monitoring():
                             gauge_track,
                         ),
                         use_container_width=True,
-                        key=f"live_t_{row['machine_name']}",
+                        key=f"live_t_{row['machine_key']}",
                     )
 
                 with col_amps:
@@ -545,10 +631,11 @@ with tab2:
     df_latest_names = get_latest_data()
 
     if not df_latest_names.empty:
-        machine_list = df_latest_names["machine_name"].tolist()
+        machine_list = df_latest_names["machine_key"].tolist()
         selected_machine = st.selectbox(
             "Seleccione el activo a analizar:",
             machine_list,
+            format_func=lambda x: MACHINE_DISPLAY_LABEL.get(x, x),
             key="select_history_asset",
         )
 

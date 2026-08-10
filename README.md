@@ -1,6 +1,6 @@
 # Proyecto IIoT de monitoreo industrial
 
-Este proyecto implementa un sistema de telemetría industrial orientado a la supervisión de activos mediante comunicación Modbus TCP, almacenamiento persistente de datos y visualización en tiempo real. Su objetivo es ofrecer una solución práctica para monitorear variables críticas de equipos y procesos industriales, con respaldo local en caso de fallas de conectividad.
+Este proyecto implementa un sistema de telemetría industrial orientado a la supervisión de activos mediante comunicación Modbus TCP, almacenamiento persistente de datos y visualización en tiempo real. Su objetivo es ofrecer una solución práctica para monitorear variables críticas de equipos industriales y procesos industriales, con respaldo local en caso de fallas de conectividad.
 
 ## Descripción general
 
@@ -13,7 +13,7 @@ El sistema permite:
 ## Arquitectura del sistema
 
 El flujo principal del proyecto consta de tres capas:
-1. Captura de datos: lectura de registros Modbus TCP desde los equipos.
+1. Captura de datos: lectura de registros Modbus TCP desde los equipos. En este caso con conversores RS485 - TCP/WIFI. 
 2. Procesamiento y almacenamiento: normalización de variables y carga en base de datos.
 3. Visualización: presentación del estado operativo y los valores históricos en un panel web.
 
@@ -56,7 +56,8 @@ El flujo principal del proyecto consta de tres capas:
 
 5. Ajustar los parámetros de equipos en config.py si es necesario.
 
-## Configuración
+## Configuración 
+
 
 ### Variables de entorno
 
@@ -132,5 +133,26 @@ El sistema genera un archivo SQLite denominado backup_mantenimiento.db, el cual 
 - Lectura robusta de datos Modbus.
 - Respaldo local en SQLite ante fallos de red.
 - Panel de monitoreo con visualización clara del estado de la planta.
+
+
+## Notas de despliegue y correcciones recientes
+
+Se documentan aquí cambios recientes que resolvieron problemas en Streamlit Cloud y comportamientos inesperados del dashboard:
+
+- `get_database_url()` ahora intenta leer `st.secrets.get("DATABASE_URL")` y, si no está disponible, cae en la variable de entorno `DATABASE_URL` (cargada desde `pass.env`). Esto evita errores cuando no hay `secrets.toml` en el entorno de ejecución.
+
+- Debug seguro en el sidebar: el expander de Debug DB ejecuta ahora una consulta inline usando una conexión nueva creada con `psycopg2.connect(db_url, connect_timeout=5)` para verificar acceso y mostrar una tabla de estado por activo. Anteriormente se invocaba una función (`get_latest_data()`) que en algunos despliegues se definía más abajo en el archivo, provocando `NameError` durante la ejecución top-down de Streamlit.
+
+- Evitar cerrar la conexión cacheada: el debug abre y cierra una conexión dedicada para diagnóstico. NO se cierra la conexión devuelta por `init_connection()` (anotada con `@st.cache_resource`) porque esa conexión es compartida por la app y cerrarla producía `psycopg2.InterfaceError` en ejecuciones concurrentes.
+
+- Umbral por defecto de desconexión: `TIMEOUT_DESCONEXION` se aumentó a `200` segundos para evitar falsos positivos de "SIN RECEPCIÓN" cuando la telemetría tiene cierta latencia. Puede ser sobrescrito poniendo en `pass.env` o en `st.secrets` la variable `TIMEOUT_DESCONEXION` (valor en segundos).
+
+Recomendaciones para despliegue en Streamlit Cloud
+
+- Añadir `DATABASE_URL` en Secrets de Streamlit (Settings → Secrets) para evitar exponer credenciales en `pass.env`.
+- Si se quiere ajustar el comportamiento sin tocar código, definir `TIMEOUT_DESCONEXION` en `pass.env` o en `st.secrets`.
+- Consultar el expander "🔧 Debug DB (solo admin)" en el sidebar para ver: fuente del secret, host:port (enmascarado), test de conexión y tabla con `machine`, `timestamp`, `tz`, `current_amps`, `seconds_since`.
+
+Si querés que documente pasos para agregar `TIMEOUT_DESCONEXION` desde la UI del dashboard en lugar de usar la variable de entorno, lo agrego en la próxima versión del README.
 
 
