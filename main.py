@@ -1,94 +1,94 @@
-# main.py
-import logging
-import os
-import time  # Librería nativa para manejar las esperas y tiempos (sleep).
-from datetime import (
-    datetime,  # Librería nativa para capturar la fecha y hora exacta del sistema de la PC.
-)
-from zoneinfo import ZoneInfo
+import socket
+import time
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-# Importamos nuestros propios módulos. Python busca estos archivos en la misma carpeta.
-import config
-from communication import read_machine_data
-from database import init_db, save_reading
-
-DATA_TIMEZONE = ZoneInfo(os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires"))
+GATEWAY_IP = "192.168.0.128"
+PORT = 8899
+SULLAIR_ID = 16
 
 
-def main():
-    logger = logging.getLogger(__name__)
-    logger.info("--- Starting Multi-Asset IIoT Data Logger (Cloud Mode) ---")
+def calc_crc(data):
+    crc = 0xFFFF
+    for pos in data:
+        crc ^= pos
+        for _ in range(8):
+            if (crc & 1) != 0:
+                crc >>= 1
+                crc ^= 0xA001
+            else:
+                crc >>= 1
+    return crc.to_bytes(2, byteorder="little")
 
-    # init_db ya no recibe db_url: la conexión se arma internamente
-    # leyendo DATABASE_URL desde el entorno (ver db_connection.py).
-    init_db()
 
-    try:
-        while (
-            True
-        ):  # "Mientras sea Verdadero" -> Un bucle infinito. El programa correrá para siempre.
+# Probamos leer bloques de 2, 4 y 10 registros desde la dirección 258 y 256
+PRUEBAS = [
+    {"addr": 258, "count": 2, "fc": 0x03},
+    {"addr": 258, "count": 2, "fc": 0x04},
+    {"addr": 256, "count": 10, "fc": 0x03},
+    {"addr": 256, "count": 10, "fc": 0x04},
+    {"addr": 258, "count": 10, "fc": 0x03},
+]
 
-            current_time = datetime.now(DATA_TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2.0)
+    s.connect((GATEWAY_IP, PORT))
+    print(
+        f"✅ Conectado a {GATEWAY_IP}:{PORT}. Probando bloque en Dirección 258 / ID {SULLAIR_ID}...\n"
+    )
 
-            for machine_name, net_config in config.EQUIPMENT.items():
+    exito = False
+    for p in PRUEBAS:
+        addr = p["addr"]
+        count = p["count"]
+        fc = p["fc"]
+        fc_str = "FC03" if fc == 0x03 else "FC04"
 
-                sensor_data = read_machine_data(
-                    net_config["host"], net_config["port"], net_config["start_address"]
-                )
+        req = (
+            bytes([SULLAIR_ID, fc])
+            + addr.to_bytes(2, byteorder="big")
+            + count.to_bytes(2, byteorder="big")
+        )
+        req += calc_crc(req)
 
-                if sensor_data:
-                    # 🛡️ ESCUDO SANITARIO: Protegemos la base de datos contra números basura del simulador.
-                    # 99999999.0 es un valor centinela típico que devuelven simuladores/PLCs cuando
-                    # el registro Modbus todavía no fue inicializado con un valor real.
-                    if (
-                        sensor_data.get("run_hours")
-                        and sensor_data["run_hours"] > 99999999.0
-                    ):
-                        logger.warning(
-                            "⚠️ [%s] Horas de marcha anómalas detectadas (%s h). Limpiando a 0.0...",
-                            machine_name,
-                            sensor_data["run_hours"],
-                        )
-                        sensor_data["run_hours"] = 0.0
+        # Limpiamos buffer
+        s.settimeout(0.1)
+        try:
+            s.recv(1024)
+        except TimeoutError:
+            pass
 
-                    save_reading(machine_name, sensor_data, current_time)
+        print(
+            f"Consultando Reg {addr} (Cant: {count}, {fc_str})...",
+            end=" ",
+            flush=True,
+        )
+        s.sendall(req)
+        time.sleep(0.4)
 
-                    logger.info(
-                        "[%s] %s -> Presion: %s Bar | Temp: %s °C | Hrs: %s h | I: %s A",
-                        current_time,
-                        machine_name,
-                        sensor_data["pressure_bar"],
-                        sensor_data["temperature_c"],
-                        sensor_data["run_hours"],
-                        sensor_data["current_amps"],
-                    )
+        s.settimeout(0.8)
+        try:
+            data = s.recv(1024)
+            if data:
+                hex_str = data.hex(" ").upper()
+
+                # Trama correcta: ID 16 + FC + Cantidad Bytes (count * 2)
+                expected_bytes = 3 + (count * 2) + 2
+                if len(data) >= 7 and data[0] == SULLAIR_ID and data[1] == fc:
+                    print("\n\n🎉 ¡¡¡ÉXITO TOTAL Y DATOS VALIDOS RECIBIDOS!!! 🎉")
+                    print(f"    Trama Modbus HEX: {hex_str}")
+
+                    # Decodificamos el primer registro
+                    val1 = int.from_bytes(data[3:5], byteorder="big")
+                    print(f"    👉 VALOR LEÍDO DEL COMPRESOR (Reg {addr}): {val1}")
+                    exito = True
+                    break
                 else:
-                    # CAMINO DEFENSIVO: La máquina no respondió.
-                    offline_data = {
-                        "pressure_bar": None,
-                        "temperature_c": None,
-                        "run_hours": None,
-                        "current_amps": None,
-                    }
+                    print(f"Respuesta ({len(data)} bytes): {hex_str}")
+            else:
+                print("Sin respuesta (Timeout).")
+        except TimeoutError:
+            print("Timeout.")
 
-                    save_reading(machine_name, offline_data, current_time)
-
-                    logger.warning(
-                        "[%s] ⚠️ ALERT: %s is OFFLINE. Failure logged. Retrying next cycle in %s seconds...",
-                        current_time,
-                        machine_name,
-                        config.POLLING_INTERVAL,
-                    )
-
-            logger.info("%s", "-" * 70)
-
-            time.sleep(config.POLLING_INTERVAL)
-
-    except KeyboardInterrupt:
-        logger.info("Logger execution stopped by user. Exiting safely...")
-
-
-if __name__ == "__main__":
-    main()
+    s.close()
+except Exception as e:
+    print(f"Error de conexión: {e}")

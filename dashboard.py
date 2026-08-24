@@ -11,14 +11,11 @@ from dotenv import load_dotenv
 ### UMBRALES DE ALERTA CRÍTICA (Se pueden ajustar según la planta)
 umbral_temp = 95.0  # °C
 umbral_pressure = 10.0  # Bar
-umbral_current_OFF = (
-    2.0  # Amperios (Si baja de este valor, se considera que el motor está apagado)
-)
 
 # ORDEN VISUAL DE LA PLANTA (Primero compresores, al final Chiller)
 MACHINE_DISPLAY_LABEL = {
-    "AERCOM_22P": "Aercom Compresor",
-    "SULLAIR_COMPRESSOR": "Sullair Compresor",
+    "AERCOM_22P": "Compresor Aercom",
+    "SULLAIR_COMPRESSOR": "Compresor Sullair ",
     "CHILLER_TRANE": "Chiller Trane",
 }
 MACHINE_ALERT_KEY = {
@@ -35,20 +32,17 @@ PREVENTIVE_ALERTS = {
         "max_temp": 95.0,  # °C (Alerta de alta temperatura)
         "min_temp": 65.0,  # °C (Alerta de temperatura baja / condensación)
         "max_press": 10.0,  # bar (Alerta de alta presión)
-        "max_amps": 46.0,  # A (Alerta de sobrecarga)
     },
     "SULLAIR SE1507NEW": {
         "max_temp": 95.0,
         "min_temp": 65.0,
         "max_press": 9.5,
-        "max_amps": 25.0,
     },
     "CHILLER TRANE CGAX030": {
         "max_temp": 12.0,  # °C (Agua caliente / bajo rendimiento)
         "min_temp": 4.5,  # °C (Alerta anti-congelamiento)
         "max_press": 27.0,  # bar (Alta presión de condensación)
         "min_press": 6.5,  # bar (Baja presión / falta de gas)
-        "max_amps": 32.0,  # A (Sobrecarga de corriente)
     },
 }
 
@@ -57,7 +51,6 @@ DEFAULT_PREVENTIVE_ALERTS = {
     "min_temp": 65.0,
     "max_press": 10.0,
     "min_press": None,
-    "max_amps": 46.0,
 }
 
 
@@ -73,7 +66,6 @@ def get_preventive_alerts(alert_key: str) -> dict:
         "min_press": thresholds.get(
             "min_press", DEFAULT_PREVENTIVE_ALERTS["min_press"]
         ),
-        "max_amps": thresholds.get("max_amps", DEFAULT_PREVENTIVE_ALERTS["max_amps"]),
     }
 
 
@@ -139,6 +131,18 @@ st.markdown(
         color: {text_muted} !important;
         font-weight: 600;
         font-size: 0.9rem !important;
+    }}
+    .industrial-alert-pulse {{
+        color: #FFFFFF !important;
+        background-color: rgba(248, 113, 113, 0.18) !important;
+        border: 1px solid #F87171 !important;
+        padding: 12px 14px;
+        border-radius: 10px;
+        margin-bottom: 10px;
+        font-weight: 600;
+    }}
+    .industrial-alert-pulse strong {{
+        color: #FFFFFF !important;
     }}
     </style>
 """,
@@ -262,7 +266,7 @@ with st.sidebar:
                     else:
                         query_dbg = """
                         SELECT DISTINCT ON (UPPER(TRIM(machine_name)))
-                            UPPER(TRIM(machine_name)) as machine_name, timestamp, current_amps
+                            UPPER(TRIM(machine_name)) as machine_name, timestamp, pressure_bar
                         FROM historical_telemetry
                         ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
                         """
@@ -302,7 +306,7 @@ with st.sidebar:
                                         "tz": (
                                             str(ts.tzinfo) if ts is not None else None
                                         ),
-                                        "current_amps": r.get("current_amps"),
+                                        "pressure_bar": r.get("pressure_bar"),
                                         "seconds_since": diff_sec,
                                     }
                                 )
@@ -319,7 +323,7 @@ def get_latest_data():
     conn = init_connection()
     query = """
     SELECT DISTINCT ON (UPPER(TRIM(machine_name))) 
-        UPPER(TRIM(machine_name)) as machine_key, timestamp, pressure_bar, temperature_c, run_hours, current_amps
+        UPPER(TRIM(machine_name)) as machine_key, timestamp, pressure_bar, temperature_c, run_hours
     FROM historical_telemetry
     ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
     """
@@ -347,7 +351,7 @@ def get_latest_data():
 def get_historical_data(machine):
     conn = init_connection()
     query = """
-    SELECT timestamp, pressure_bar, temperature_c, current_amps
+    SELECT timestamp, pressure_bar, temperature_c
     FROM historical_telemetry
     WHERE UPPER(TRIM(machine_name)) = UPPER(TRIM(%s))
     ORDER BY timestamp DESC
@@ -370,14 +374,10 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
         go.Indicator(
             mode="gauge+number",
             value=value,
-            domain={"x": [0, 1], "y": [0, 1]},
-            title={
-                "text": f"<b>{title}</b>",
-                "font": {"size": 14, "color": font_color},
-                "align": "center",
-            },
+            # Reservamos el 25% superior del lienzo para que el arco no invada el título
+            domain={"x": [0, 1], "y": [0, 0.75]},
             number={
-                "font": {"size": 22, "color": font_color},
+                "font": {"size": 25, "color": font_color},
                 "suffix": f" {unit}",
             },
             gauge={
@@ -385,7 +385,7 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
                     "range": [0, max_val],
                     "tickwidth": 1,
                     "tickcolor": font_color,
-                    "tickfont": {"size": 10, "color": font_color},
+                    "tickfont": {"size": 25, "color": font_color},
                 },
                 "bar": {"color": color},
                 "bgcolor": track_color,
@@ -393,9 +393,23 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
             },
         )
     )
+
+    # Anotación con coordenada fija al lienzo (paper) para alinear todos los títulos
+    fig.add_annotation(
+        text=f"<b>{title}</b>",
+        x=0.5,
+        y=1.0,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+        font=dict(size=20, color=font_color),
+        xanchor="center",
+        yanchor="bottom",
+    )
+
     fig.update_layout(
-        height=145,
-        margin=dict(l=20, r=20, t=40, b=10),
+        height=150,
+        margin=dict(l=20, r=20, t=25, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
     )
@@ -426,24 +440,23 @@ def render_live_monitoring():
                 ).total_seconds()
 
                 # 🧹 Sanitización defensiva
-                amps = row["current_amps"] if pd.notna(row["current_amps"]) else None
                 temp = row["temperature_c"] if pd.notna(row["temperature_c"]) else None
                 press = row["pressure_bar"] if pd.notna(row["pressure_bar"]) else None
                 hours = row["run_hours"] if pd.notna(row["run_hours"]) else None
 
                 # 🔌 Estado operativo
-                if segundos_sin_datos > TIMEOUT_DESCONEXION or amps is None:
+                if segundos_sin_datos > TIMEOUT_DESCONEXION:
                     is_online = False
                     status_badge = """
-                    <span style='background-color: #3D2D00; color: #FBBF24; padding: 6px 14px; 
+                    <span style='background-color: #3D2D00; color: #FFFFFF; padding: 6px 14px; 
                     border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #D97706;'>
-                        ⚠️ SIN RECEPCIÓN
+                        ⚠️ SIN CONEXIÓN
                     </span>
                     """
-                elif amps > umbral_current_OFF:
+                elif press is not None and press > 1:
                     is_online = True
                     status_badge = """
-                    <span style='background-color: #0D3321; color: #34D399; padding: 6px 14px; 
+                    <span style='background-color: #0D3321; color: #FFFFFF; padding: 6px 14px; 
                     border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #059669;'>
                         🟢 ENCENDIDO
                     </span>
@@ -451,9 +464,9 @@ def render_live_monitoring():
                 else:
                     is_online = True
                     status_badge = """
-                    <span style='background-color: #3C1618; color: #F87171; padding: 6px 14px; 
-                    border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #DC2626;'>
-                        🔴 APAGADO
+                    <span style='background-color: #1F2937; color: #FFFFFF; padding: 6px 14px; 
+                    border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #6B7280;'>
+                        ⚪ APAGADO
                     </span>
                     """
 
@@ -496,11 +509,6 @@ def render_live_monitoring():
                             alert_messages.append(
                                 f"Alta Presión: {press} Bar (Umbral: >{thresholds['max_press']} Bar)"
                             )
-                    if amps is not None and amps > thresholds["max_amps"]:
-                        alert_messages.append(
-                            f"Sobrecarga de corriente: {amps} A (Umbral: >{thresholds['max_amps']} A)"
-                        )
-
                     if alert_messages:
                         for alert in alert_messages:
                             st.markdown(
@@ -513,7 +521,7 @@ def render_live_monitoring():
                             )
 
                 # 📊 CUADRÍCULA DE MEDIDORES Y MÉTRICAS
-                col_press, col_temp, col_amps, col_hours = st.columns(4)
+                col_press, col_temp, col_hours = st.columns(3)
 
                 with col_press:
                     st.plotly_chart(
@@ -545,16 +553,6 @@ def render_live_monitoring():
                         key=f"live_t_{row['machine_key']}",
                     )
 
-                with col_amps:
-                    st.markdown(
-                        "<div style='min-height:15px;'></div>",
-                        unsafe_allow_html=True,
-                    )
-                    st.metric(
-                        label="⚡ Corriente Motor",
-                        value=f"{amps} A" if amps is not None else "---",
-                    )
-
                 with col_hours:
                     st.markdown(
                         "<div style='min-height:15px;'></div>",
@@ -562,7 +560,7 @@ def render_live_monitoring():
                     )
                     st.metric(
                         label="⏱️ Horas de Marcha",
-                        value=f"{hours:,.1f} h" if hours is not None else "---",
+                        value=f"{int(hours):,} h" if hours is not None else "---",
                     )
 
                 st.markdown(
@@ -576,8 +574,8 @@ def render_live_monitoring():
 # ==============================================================================
 # 8. INTERFAZ DE USUARIO PRINCIPAL
 # ==============================================================================
-st.title("🏭 Multi-Asset Telemetry Pipeline")
-st.caption("Sistema SCADA IIoT — Monitoreo de activos industriales en tiempo real")
+st.title("🏭 Monitoreo de equipos auxiliares en tiempo real")
+st.caption("Sistema SCADA IIoT")
 st.markdown("---")
 
 tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])

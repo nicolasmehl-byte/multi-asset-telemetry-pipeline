@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def read_machine_data(host, port=None, start_address=None):
     """Conecta a un activo Modbus y lee registros de forma robusta.
 
-    Devuelve un diccionario con claves: 'pressure_bar', 'temperature_c', 'run_hours', 'current_amps'
+    Devuelve un diccionario con claves: 'pressure_bar', 'temperature_c', 'run_hours'
     (estas claves coinciden con las columnas de la BD y con el resto del pipeline).
     """
     port = port or config.PORT_MODBUS
@@ -60,7 +60,6 @@ def read_machine_data(host, port=None, start_address=None):
             "temperature_c": registers[config.IDX_TEMPERATURE]
             / config.SCALE_TEMPERATURE,
             "run_hours": run_hours,
-            "current_amps": registers[config.IDX_CURRENT] / config.SCALE_CURRENT,
         }
     except Exception as e:
         logger.exception(

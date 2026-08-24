@@ -43,8 +43,8 @@ def guardar_en_local(machine_name, data, timestamp):
         cursor.execute(
             """
             INSERT INTO telemetria_backup 
-            (timestamp, machine_name, pressure_bar, temperature_c, run_hours, current_amps)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (timestamp, machine_name, pressure_bar, temperature_c, run_hours)
+            VALUES (?, ?, ?, ?, ?)
         """,
             (
                 timestamp,
@@ -52,7 +52,6 @@ def guardar_en_local(machine_name, data, timestamp):
                 data["pressure_bar"],
                 data["temperature_c"],
                 data["run_hours"],
-                data["current_amps"],
             ),
         )
         conexion.commit()
@@ -206,8 +205,8 @@ def save_reading(machine_name, data, timestamp):
 
     # 2. Intentamos la inserción normal en la nube
     query = """
-        INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar, temperature_c, run_hours, current_amps)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar, temperature_c, run_hours)
+        VALUES (%s, %s, %s, %s, %s)
     """
 
     connection = None
@@ -223,7 +222,6 @@ def save_reading(machine_name, data, timestamp):
                 data["pressure_bar"],
                 data["temperature_c"],
                 data["run_hours"],
-                data["current_amps"],
             ),
         )
 
