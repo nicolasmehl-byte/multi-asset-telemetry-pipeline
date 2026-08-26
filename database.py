@@ -31,6 +31,19 @@ def inicializar_base_local():
             current_amps REAL
         )
     """)
+    existing_columns = {
+        row[1] for row in cursor.execute("PRAGMA table_info(telemetria_backup)")
+    }
+    for column, definition in (
+        ("pressure_sink_bar", "REAL"),
+        ("operating_state", "TEXT"),
+        ("shutdown_code", "INTEGER"),
+        ("warnings", "TEXT"),
+    ):
+        if column not in existing_columns:
+            cursor.execute(
+                f"ALTER TABLE telemetria_backup ADD COLUMN {column} {definition}"
+            )
     conexion.commit()
     conexion.close()
 
@@ -43,15 +56,20 @@ def guardar_en_local(machine_name, data, timestamp):
         cursor.execute(
             """
             INSERT INTO telemetria_backup 
-            (timestamp, machine_name, pressure_bar, temperature_c, run_hours)
-            VALUES (?, ?, ?, ?, ?)
+            (timestamp, machine_name, pressure_bar, pressure_sink_bar,
+             temperature_c, run_hours, operating_state, shutdown_code, warnings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 timestamp,
                 machine_name,
                 data["pressure_bar"],
+                data.get("pressure_sink_bar"),
                 data["temperature_c"],
                 data["run_hours"],
+                data.get("operating_state"),
+                data.get("shutdown_code"),
+                data.get("warnings"),
             ),
         )
         conexion.commit()
@@ -74,7 +92,9 @@ def guardar_en_local(machine_name, data, timestamp):
 def _traer_lote_pendiente(cursor_local, batch_size):
     """Trae un lote (no todo de una) de filas pendientes de sincronizar."""
     cursor_local.execute(
-        """SELECT id, timestamp, machine_name, pressure_bar, temperature_c, run_hours, current_amps
+        """SELECT id, timestamp, machine_name, pressure_bar, pressure_sink_bar,
+              temperature_c, run_hours, operating_state, shutdown_code,
+              warnings, current_amps
            FROM telemetria_backup
            LIMIT ?""",
         (batch_size,),
@@ -111,8 +131,10 @@ def sincronizar_datos_pendientes():
         cursor_cloud = conn_cloud.cursor()
 
         query_cloud = """
-            INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar, temperature_c, run_hours, current_amps)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar,
+                pressure_sink_bar, temperature_c, run_hours, operating_state,
+                shutdown_code, warnings, current_amps)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         for fila in filas_pendientes:
@@ -121,8 +143,12 @@ def sincronizar_datos_pendientes():
                 timestamp,
                 machine_name,
                 pressure,
+                pressure_sink,
                 temperature,
                 run_hours,
+                operating_state,
+                shutdown_code,
+                warnings,
                 current,
             ) = fila
             try:
@@ -132,8 +158,12 @@ def sincronizar_datos_pendientes():
                         timestamp,
                         machine_name,
                         pressure,
+                        pressure_sink,
                         temperature,
                         run_hours,
+                        operating_state,
+                        shutdown_code,
+                        warnings,
                         current,
                     ),
                 )
@@ -205,8 +235,10 @@ def save_reading(machine_name, data, timestamp):
 
     # 2. Intentamos la inserción normal en la nube
     query = """
-        INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar, temperature_c, run_hours)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar,
+            pressure_sink_bar, temperature_c, run_hours, operating_state,
+            shutdown_code, warnings)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     connection = None
@@ -220,8 +252,12 @@ def save_reading(machine_name, data, timestamp):
                 timestamp,
                 machine_name,
                 data["pressure_bar"],
+                data.get("pressure_sink_bar"),
                 data["temperature_c"],
                 data["run_hours"],
+                data.get("operating_state"),
+                data.get("shutdown_code"),
+                data.get("warnings"),
             ),
         )
 

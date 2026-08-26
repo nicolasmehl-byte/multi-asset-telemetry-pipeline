@@ -1,4 +1,6 @@
+import json
 import os
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -31,12 +33,14 @@ PREVENTIVE_ALERTS = {
     "AERCOM 22P": {
         "max_temp": 95.0,  # °C (Alerta de alta temperatura)
         "min_temp": 65.0,  # °C (Alerta de temperatura baja / condensación)
-        "max_press": 10.0,  # bar (Alerta de alta presión)
+        "max_press": 7.5,  # bar (Alerta de alta presión)
+        "min_press": 6.5,
     },
     "SULLAIR SE1507NEW": {
         "max_temp": 95.0,
         "min_temp": 65.0,
-        "max_press": 9.5,
+        "max_press": 7.5,
+        "min_press": 6.5,
     },
     "CHILLER TRANE CGAX030": {
         "max_temp": 12.0,  # °C (Agua caliente / bajo rendimiento)
@@ -46,26 +50,32 @@ PREVENTIVE_ALERTS = {
     },
 }
 
-DEFAULT_PREVENTIVE_ALERTS = {
-    "max_temp": 95.0,
-    "min_temp": 65.0,
-    "max_press": 10.0,
-    "min_press": None,
+SUBSTATE_LABELS = {
+    "STOPPED": "DETENIDO",
+    "OFF / DETENIDO": "DETENIDO",
+    "READY (LISTO)": "LISTO",
+    "ENABLED": "HABILITADO",
+    "AUTOENABLED": "AUTO HABILITADO",
+    "STARTING (ARRANCANDO)": "ARRANCANDO",
+    "UNLOADED (EN VACÍO)": "EN VACÍO",
+    "LOADING (CARGANDO)": "CARGANDO",
+    "FULL LOAD (PLENA CARGA)": "PLENA CARGA",
+    "MODULATING (MODULANDO)": "MODULANDO",
+    "STOPPING (PARANDO)": "DETENIENDO",
 }
 
 
+def translate_substate(value):
+    return SUBSTATE_LABELS.get(str(value).strip().upper(), str(value))
+
+
 def get_preventive_alerts(alert_key: str) -> dict:
-    thresholds = PREVENTIVE_ALERTS.get(alert_key, DEFAULT_PREVENTIVE_ALERTS)
-    # Garantizar todas las claves están presentes.
+    thresholds = PREVENTIVE_ALERTS[alert_key]
     return {
-        "max_temp": thresholds.get("max_temp", DEFAULT_PREVENTIVE_ALERTS["max_temp"]),
-        "min_temp": thresholds.get("min_temp", DEFAULT_PREVENTIVE_ALERTS["min_temp"]),
-        "max_press": thresholds.get(
-            "max_press", DEFAULT_PREVENTIVE_ALERTS["max_press"]
-        ),
-        "min_press": thresholds.get(
-            "min_press", DEFAULT_PREVENTIVE_ALERTS["min_press"]
-        ),
+        "max_temp": thresholds["max_temp"],
+        "min_temp": thresholds["min_temp"],
+        "max_press": thresholds["max_press"],
+        "min_press": thresholds["min_press"],
     }
 
 
@@ -73,7 +83,7 @@ def get_preventive_alerts(alert_key: str) -> dict:
 # 1. CONFIGURACIÓN DE PÁGINA (¡Restaurada!)
 # ==============================================================================
 st.set_page_config(
-    page_title="Monitoreo Industrial Beniplast IIoT", page_icon="🏭", layout="wide"
+    page_title="Beniplast | Monitoreo Industrial", page_icon="B", layout="wide"
 )
 
 # ==============================================================================
@@ -118,19 +128,42 @@ st.markdown(
         border: 1px solid {card_border} !important;
         border-radius: 12px;
         padding: 16px;
+        box-sizing: border-box;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }}
+
+    [data-testid="stColumn"] {{
+        min-width: 0 !important;
+        box-sizing: border-box;
     }}
     
     /* Métricas */
     [data-testid="stMetricValue"] {{
-        font-size: 1.8rem !important;
+        font-size: 2rem !important;
         font-weight: 700;
         color: {metric_color} !important;
     }}
     [data-testid="stMetricLabel"] {{
         color: {text_muted} !important;
         font-weight: 600;
-        font-size: 0.9rem !important;
+        font-size: 1.05rem !important;
+    }}
+    [data-baseweb="tab"] {{
+        font-size: 1.15rem !important;
+        font-weight: 700 !important;
+    }}
+    .substate-label {{
+        color: {text_muted};
+        font-size: 0.75rem;
+        font-weight: 600;
+        margin-top: 10px;
+    }}
+    .substate-value {{
+        color: {metric_color};
+        font-size: 1rem;
+        font-weight: 700;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
     }}
     .industrial-alert-pulse {{
         color: #FFFFFF !important;
@@ -143,6 +176,65 @@ st.markdown(
     }}
     .industrial-alert-pulse strong {{
         color: #FFFFFF !important;
+    }}
+    .industrial-alert-compact {{
+        color: #FFFFFF !important;
+        background-color: rgba(248, 113, 113, 0.12) !important;
+        border-left: 3px solid #F87171 !important;
+        padding: 5px 10px;
+        margin: 3px 0;
+        font-size: 13px;
+    }}
+    .maintenance-badge {{
+        display: inline-block;
+        color: #FFFFFF !important;
+        background-color: #991B1B !important;
+        border: 1px solid #F87171 !important;
+        border-radius: 14px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        animation: blink 1.2s step-start infinite;
+        cursor: help;
+    }}
+    .industrial-alert-failure {{
+        color: #FFFFFF !important;
+        background-color: #991B1B !important;
+        border: 2px solid #F87171 !important;
+        padding: 14px 16px;
+        border-radius: 8px;
+        margin: 5px 0 10px;
+        font-size: 18px;
+        font-weight: 700;
+    }}
+    .status-badge {{
+        display: inline-block;
+        padding: 8px 18px;
+        border-radius: 20px;
+        font-weight: 700;
+        font-size: 16px;
+        color: #FFFFFF !important;
+        text-align: center;
+    }}
+    .status-on {{
+        background-color: #16A34A;
+        border: 1px solid #4ADE80;
+    }}
+    .status-off, .status-offline {{
+        background-color: #DC2626;
+        border: 1px solid #F87171;
+        animation: blink 1.2s step-start infinite;
+    }}
+    .equipment-offline {{ opacity: 0.35; }}
+    .js-plotly-plot .plotly .main-svg {{
+        overflow: visible !important;
+    }}
+    div[data-testid="stPlotlyChart"] {{
+        width: 100% !important;
+        min-width: 0 !important;
+    }}
+    @keyframes blink {{
+        50% {{ opacity: 0.35; }}
     }}
     </style>
 """,
@@ -189,6 +281,14 @@ def init_connection():
         )
         st.stop()
     return psycopg2.connect(db_url)
+
+
+def read_postgres_dataframe(query, conn, params=None):
+    with conn.cursor() as cursor:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        columns = [description[0] for description in cursor.description]
+    return pd.DataFrame.from_records(rows, columns=columns)
 
 
 # ---------------------------------------------------------------------------
@@ -270,7 +370,7 @@ with st.sidebar:
                         FROM historical_telemetry
                         ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
                         """
-                        df_dbg = pd.read_sql(query_dbg, conn_dbg)
+                        df_dbg = read_postgres_dataframe(query_dbg, conn_dbg)
                         try:
                             conn_dbg.close()
                         except Exception:
@@ -322,12 +422,54 @@ with st.sidebar:
 def get_latest_data():
     conn = init_connection()
     query = """
-    SELECT DISTINCT ON (UPPER(TRIM(machine_name))) 
-        UPPER(TRIM(machine_name)) as machine_key, timestamp, pressure_bar, temperature_c, run_hours
-    FROM historical_telemetry
-    ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
+    WITH latest_reading AS (
+        SELECT DISTINCT ON (UPPER(TRIM(machine_name)))
+            UPPER(TRIM(machine_name)) AS machine_key,
+            timestamp, pressure_bar, temperature_c, run_hours
+        FROM historical_telemetry
+        ORDER BY UPPER(TRIM(machine_name)), timestamp DESC
+    )
+    SELECT
+        latest_reading.machine_key,
+        latest_reading.timestamp,
+        latest_reading.pressure_bar,
+        latest_reading.temperature_c,
+        latest_reading.run_hours,
+        (
+            SELECT pressure_sink_bar
+            FROM historical_telemetry h
+            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
+              AND h.pressure_sink_bar IS NOT NULL
+            ORDER BY h.timestamp DESC
+            LIMIT 1
+        ) AS pressure_sink_bar,
+        (
+            SELECT operating_state
+            FROM historical_telemetry h
+            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
+              AND h.operating_state IS NOT NULL
+            ORDER BY h.timestamp DESC
+            LIMIT 1
+        ) AS operating_state,
+        (
+            SELECT shutdown_code
+            FROM historical_telemetry h
+            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
+              AND h.shutdown_code IS NOT NULL
+            ORDER BY h.timestamp DESC
+            LIMIT 1
+        ) AS shutdown_code,
+        (
+            SELECT warnings
+            FROM historical_telemetry h
+            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
+              AND h.warnings IS NOT NULL
+            ORDER BY h.timestamp DESC
+            LIMIT 1
+        ) AS warnings
+    FROM latest_reading;
     """
-    df = pd.read_sql(query, conn)
+    df = read_postgres_dataframe(query, conn)
 
     if not df.empty:
         if df["timestamp"].dt.tz is None:
@@ -347,17 +489,22 @@ def get_latest_data():
     return df
 
 
-@st.cache_data(ttl=15)
-def get_historical_data(machine):
+def get_historical_data(machine, start_date, end_date):
     conn = init_connection()
     query = """
-    SELECT timestamp, pressure_bar, temperature_c
+        SELECT timestamp, pressure_bar, pressure_sink_bar, temperature_c,
+            operating_state, warnings
     FROM historical_telemetry
     WHERE UPPER(TRIM(machine_name)) = UPPER(TRIM(%s))
-    ORDER BY timestamp DESC
-    LIMIT 300;
+      AND timestamp >= %s
+      AND timestamp < %s
+    ORDER BY timestamp ASC;
     """
-    df = pd.read_sql(query, conn, params=(machine,))
+    start_datetime = datetime.combine(start_date, datetime.min.time())
+    end_datetime = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
+    df = read_postgres_dataframe(
+        query, conn, params=(machine, start_datetime, end_datetime)
+    )
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         if df["timestamp"].dt.tz is None:
@@ -374,10 +521,10 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
         go.Indicator(
             mode="gauge+number",
             value=value,
-            # Reservamos el 25% superior del lienzo para que el arco no invada el título
-            domain={"x": [0, 1], "y": [0, 0.75]},
+            # Reservamos espacio suficiente arriba para separar el titulo del arco
+            domain={"x": [0.06, 0.94], "y": [0, 0.68]},
             number={
-                "font": {"size": 25, "color": font_color},
+                "font": {"size": 34, "color": font_color},
                 "suffix": f" {unit}",
             },
             gauge={
@@ -385,7 +532,7 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
                     "range": [0, max_val],
                     "tickwidth": 1,
                     "tickcolor": font_color,
-                    "tickfont": {"size": 25, "color": font_color},
+                    "tickfont": {"size": 19, "color": font_color},
                 },
                 "bar": {"color": color},
                 "bgcolor": track_color,
@@ -394,24 +541,59 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
         )
     )
 
-    # Anotación con coordenada fija al lienzo (paper) para alinear todos los títulos
+    # El titulo queda fuera del area del gauge para evitar superposiciones al ampliar.
     fig.add_annotation(
         text=f"<b>{title}</b>",
         x=0.5,
-        y=1.0,
+        y=0.96,
         xref="paper",
         yref="paper",
         showarrow=False,
-        font=dict(size=20, color=font_color),
+        font=dict(size=34, color=font_color),
         xanchor="center",
         yanchor="bottom",
     )
 
     fig.update_layout(
-        height=150,
-        margin=dict(l=20, r=20, t=25, b=10),
+        height=300,
+        margin=dict(l=24, r=24, t=52, b=12),
+        autosize=True,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
+
+
+def draw_temperature_gauge(value, font_color, track_color):
+    fig = draw_gauge(
+        value, "Temperatura", 110, "#16A34A", "°C", font_color, track_color
+    )
+    fig.update_traces(
+        gauge={
+            "steps": [
+                {"range": [0, 95], "color": "#166534"},
+                {"range": [95, 103], "color": "#A16207"},
+                {"range": [103, 110], "color": "#991B1B"},
+            ],
+            "bar": {"color": "#F8FAFC"},
+        }
+    )
+    return fig
+
+
+def draw_pressure_gauge(value, font_color, track_color):
+    fig = draw_gauge(
+        value, "Presión Línea", 15, "#00E676", "Bar", font_color, track_color
+    )
+    fig.update_traces(
+        gauge={
+            "steps": [
+                {"range": [0, 6.5], "color": "#3F3F46"},
+                {"range": [6.5, 7.5], "color": "#166534"},
+                {"range": [7.5, 15], "color": "#991B1B"},
+            ],
+            "bar": {"color": "#F8FAFC"},
+        }
     )
     return fig
 
@@ -429,7 +611,7 @@ def render_live_monitoring():
 
     if not df_latest.empty:
         for index, row in df_latest.iterrows():
-            with st.container():
+            with st.container(border=True):
                 # 🕒 Tiempo transcurrido
                 last_update = pd.to_datetime(row["timestamp"])
                 if last_update.tzinfo is None:
@@ -440,35 +622,53 @@ def render_live_monitoring():
                 ).total_seconds()
 
                 # 🧹 Sanitización defensiva
-                temp = row["temperature_c"] if pd.notna(row["temperature_c"]) else None
-                press = row["pressure_bar"] if pd.notna(row["pressure_bar"]) else None
+                temp = (
+                    float(row["temperature_c"])
+                    if pd.notna(row["temperature_c"])
+                    else None
+                )
+                press = (
+                    float(row["pressure_bar"])
+                    if pd.notna(row["pressure_bar"])
+                    else None
+                )
+                pressure_sink = (
+                    float(row["pressure_sink_bar"])
+                    if pd.notna(row["pressure_sink_bar"])
+                    else None
+                )
                 hours = row["run_hours"] if pd.notna(row["run_hours"]) else None
+                operating_state = (
+                    translate_substate(row["operating_state"])
+                    if pd.notna(row["operating_state"])
+                    else "N/D"
+                )
+                shutdown_code = (
+                    int(row["shutdown_code"])
+                    if pd.notna(row["shutdown_code"])
+                    else None
+                )
+                warnings = []
+                if pd.notna(row["warnings"]):
+                    try:
+                        warnings = json.loads(row["warnings"])
+                    except (TypeError, json.JSONDecodeError):
+                        warnings = [str(row["warnings"])]
 
                 # 🔌 Estado operativo
                 if segundos_sin_datos > TIMEOUT_DESCONEXION:
-                    is_online = False
-                    status_badge = """
-                    <span style='background-color: #3D2D00; color: #FFFFFF; padding: 6px 14px; 
-                    border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #D97706;'>
-                        ⚠️ SIN CONEXIÓN
-                    </span>
-                    """
+                    status = "SIN CONEXIÓN"
+                    status_class = "status-offline"
                 elif press is not None and press > 1:
-                    is_online = True
-                    status_badge = """
-                    <span style='background-color: #0D3321; color: #FFFFFF; padding: 6px 14px; 
-                    border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #059669;'>
-                        🟢 ENCENDIDO
-                    </span>
-                    """
+                    status = "ENCENDIDO"
+                    status_class = "status-on"
                 else:
-                    is_online = True
-                    status_badge = """
-                    <span style='background-color: #1F2937; color: #FFFFFF; padding: 6px 14px; 
-                    border-radius: 20px; font-weight: 600; font-size: 14px; border: 1px solid #6B7280;'>
-                        ⚪ APAGADO
-                    </span>
-                    """
+                    status = "APAGADO"
+                    status_class = "status-off"
+                is_online = status != "SIN CONEXIÓN"
+                status_badge = (
+                    f"<span class='status-badge {status_class}'>{status}</span>"
+                )
 
                 # 🗂️ ENCABEZADO DE ACTIVO
                 col_header_title, col_header_status = st.columns([3, 1])
@@ -480,87 +680,122 @@ def render_live_monitoring():
                         unsafe_allow_html=True,
                     )
 
-                # 🚨 BANNERS DE ALERTAS
+                # Falla de parada: se muestra inmediatamente debajo del estado.
+                if shutdown_code not in (None, 0):
+                    st.markdown(
+                        f"<div class='industrial-alert-failure'>🚨 FALLA DE PARADA: código {shutdown_code}</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                # 🚨 ALERTAS Y ADVERTENCIAS
+                temperature_alert = None
+                pressure_alert = None
+                maintenance_alerts = []
                 if not is_online:
-                    st.warning(
-                        "⚠️ **Pérdida de Comunicación:** No se reciben telemetrías válidas del dispositivo."
+                    st.markdown(
+                        "<div class='industrial-alert-compact'>⚠️ Pérdida de comunicación: no se reciben telemetrías válidas.</div>",
+                        unsafe_allow_html=True,
                     )
                 else:
-                    alert_messages = []
-                    thresholds = get_preventive_alerts(row["machine_alert_key"])
+                    alert_key = MACHINE_ALERT_KEY[str(row["machine_key"])]
+                    thresholds = get_preventive_alerts(alert_key)
                     if temp is not None:
                         if temp > thresholds["max_temp"]:
-                            alert_messages.append(
-                                f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
-                            )
+                            temperature_alert = f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
                         elif temp < thresholds["min_temp"]:
-                            alert_messages.append(
-                                f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
-                            )
+                            temperature_alert = f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
                     if press is not None:
                         if (
                             thresholds["min_press"] is not None
                             and press < thresholds["min_press"]
                         ):
-                            alert_messages.append(
-                                f"Presión baja: {press} Bar (Umbral: <{thresholds['min_press']} Bar)"
-                            )
+                            pressure_alert = f"Presión baja: {press} Bar (Umbral: <{thresholds['min_press']} Bar)"
                         elif press > thresholds["max_press"]:
-                            alert_messages.append(
-                                f"Alta Presión: {press} Bar (Umbral: >{thresholds['max_press']} Bar)"
-                            )
-                    if alert_messages:
-                        for alert in alert_messages:
-                            st.markdown(
-                                f"""
-                            <div class="industrial-alert-pulse">
-                                ⚠️ <strong>¡ALERTA DE PLANTA!</strong> {alert}
-                            </div>
-                            """,
-                                unsafe_allow_html=True,
-                            )
+                            pressure_alert = f"Alta Presión: {press} Bar (Umbral: >{thresholds['max_press']} Bar)"
+                    maintenance_alerts.extend(
+                        warning
+                        for warning in warnings
+                        if "SIN ADVERTENCIAS" not in warning
+                    )
+                    if maintenance_alerts:
+                        alert_tooltip = "&#10;".join(maintenance_alerts).replace(
+                            '"', "&quot;"
+                        )
+                        st.markdown(
+                            f"<span class='maintenance-badge' title=\"{alert_tooltip}\">🔧 ALARMA MANTENIMIENTO</span>",
+                            unsafe_allow_html=True,
+                        )
 
                 # 📊 CUADRÍCULA DE MEDIDORES Y MÉTRICAS
-                col_press, col_temp, col_hours = st.columns(3)
+                col_press, col_temp, col_hours = st.columns(3, gap="small")
+
+                delta_pressure = (
+                    pressure_sink - press
+                    if pressure_sink is not None and press is not None
+                    else None
+                )
 
                 with col_press:
-                    st.plotly_chart(
-                        draw_gauge(
-                            press if press is not None else 0.0,
-                            "Presión",
-                            15,
-                            "#00E676",
-                            "Bar",
-                            text_color,
-                            gauge_track,
-                        ),
-                        use_container_width=True,
-                        key=f"live_p_{row['machine_key']}",
-                    )
+                    if is_online:
+                        st.plotly_chart(
+                            draw_pressure_gauge(
+                                press if press is not None else 0.0,
+                                text_color,
+                                gauge_track,
+                            ),
+                            width="stretch",
+                            config={"responsive": True, "displayModeBar": False},
+                            key=f"live_p_{row['machine_key']}",
+                        )
+                    else:
+                        st.metric("Presión Línea", "N/D")
+                    if pressure_alert:
+                        st.error(pressure_alert, icon="⚠️")
 
                 with col_temp:
-                    st.plotly_chart(
-                        draw_gauge(
-                            temp if temp is not None else 0.0,
-                            "Temperatura",
-                            100,
-                            "#FF5252",
-                            "°C",
-                            text_color,
-                            gauge_track,
-                        ),
-                        use_container_width=True,
-                        key=f"live_t_{row['machine_key']}",
-                    )
+                    if is_online:
+                        st.plotly_chart(
+                            draw_temperature_gauge(
+                                temp if temp is not None else 0.0,
+                                text_color,
+                                gauge_track,
+                            ),
+                            width="stretch",
+                            config={"responsive": True, "displayModeBar": False},
+                            key=f"live_t_{row['machine_key']}",
+                        )
+                    else:
+                        st.metric("Temperatura", "N/D")
+                    if temperature_alert:
+                        st.error(temperature_alert, icon="⚠️")
 
                 with col_hours:
+                    col_hours_value, col_delta = st.columns(2, gap="small")
+                    with col_hours_value:
+                        st.metric(
+                            label="⏱️ Horas de Marcha",
+                            value=(
+                                f"{int(hours):,} h"
+                                if is_online and hours is not None
+                                else "N/D"
+                            ),
+                        )
+                    with col_delta:
+                        delta_label = "ΔP Filtro Separador"
+                        if delta_pressure is not None and delta_pressure >= 0.8:
+                            delta_label += " ⚠️ Reemplazar Filtro"
+                        st.metric(
+                            delta_label,
+                            (
+                                f"{delta_pressure:.1f} bar"
+                                if is_online and delta_pressure is not None
+                                else "N/D"
+                            ),
+                        )
                     st.markdown(
-                        "<div style='min-height:15px;'></div>",
+                        "<div class='substate-label'>Sub-Estado Modbus</div>"
+                        f"<div class='substate-value'>{operating_state if is_online else 'N/D'}</div>",
                         unsafe_allow_html=True,
-                    )
-                    st.metric(
-                        label="⏱️ Horas de Marcha",
-                        value=f"{int(hours):,} h" if hours is not None else "---",
                     )
 
                 st.markdown(
@@ -574,8 +809,29 @@ def render_live_monitoring():
 # ==============================================================================
 # 8. INTERFAZ DE USUARIO PRINCIPAL
 # ==============================================================================
-st.title("🏭 Monitoreo de equipos auxiliares en tiempo real")
-st.caption("Sistema SCADA IIoT")
+logo_path = os.path.join(BASE_DIR, "logo_grupo_beniplast.png")
+header_logo, header_text = st.columns([1, 5], vertical_alignment="center")
+with header_logo:
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=220)
+with header_text:
+    st.markdown(
+        """
+        <div style="border-left: 3px solid #2F81F7; padding-left: 18px;">
+            <h1 style="margin: 3px 0 2px; font-size: 2rem; line-height: 0.5;">
+                Sistema de Monitoreo Industrial
+            </h1>
+            <div style="color: #94A3B8; font-size: 1.20rem;">
+                Supervisión operativa y análisis de variables críticas
+            </div>
+            </h1 style="margin: 5px 0 4px; font-size: 2rem; line-height: 1.2;">
+            <div style="color: #94A3B8; font-size: 1.20rem;">
+                Departamento de Mantenimiento 
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 st.markdown("---")
 
 tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
@@ -597,11 +853,35 @@ with tab2:
             key="select_history_asset",
         )
 
-        df_hist = get_historical_data(selected_machine)
+        default_end_date = datetime.now().date()
+        default_start_date = default_end_date - timedelta(days=6)
+        with st.expander("Configurar período", expanded=False):
+            start_date = st.date_input(
+                "Fecha inicial",
+                value=default_start_date,
+                format="DD/MM/YYYY",
+                key="history_start_date",
+            )
+            end_date = st.date_input(
+                "Fecha final",
+                value=default_end_date,
+                format="DD/MM/YYYY",
+                key="history_end_date",
+            )
+
+        if start_date > end_date:
+            st.error("La fecha inicial no puede ser posterior a la fecha final.")
+            st.stop()
+
+        df_hist = get_historical_data(selected_machine, start_date, end_date)
 
         if not df_hist.empty:
             st.markdown(
                 f"#### Historial analítico: **{selected_machine}** (`{len(df_hist)} registros`)"
+            )
+            st.caption(
+                f"Período mostrado: {df_hist['timestamp'].min():%d/%m/%Y %H:%M} "
+                f"a {df_hist['timestamp'].max():%d/%m/%Y %H:%M}"
             )
 
             # --- GRÁFICO 1: TEMPERATURA ---
@@ -610,7 +890,7 @@ with tab2:
                 x="timestamp",
                 y="temperature_c",
                 title="📈 Evolución Térmica",
-                markers=False,
+                markers=True,
             )
             fig_temp.update_traces(line_color="#FF5252", line_width=2)
             fig_temp.update_layout(
@@ -620,14 +900,20 @@ with tab2:
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor=card_bg,
                 font=dict(color=text_color),
-                xaxis=dict(showgrid=True, gridcolor=grid_color, title=""),
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor=grid_color,
+                    title="",
+                    tickformat="%d/%m/%Y",
+                    hoverformat="%d/%m/%Y %H:%M",
+                ),
                 yaxis=dict(
                     showgrid=True, gridcolor=grid_color, title="Temperatura (°C)"
                 ),
             )
             st.plotly_chart(
                 fig_temp,
-                use_container_width=True,
+                width="stretch",
                 key=f"chart_h_temp_{selected_machine}",
             )
 
@@ -637,7 +923,7 @@ with tab2:
                 x="timestamp",
                 y="pressure_bar",
                 title="📉 Comportamiento de Presión",
-                markers=False,
+                markers=True,
             )
             fig_pres.update_traces(line_color="#00E676", line_width=2)
             fig_pres.update_layout(
@@ -647,13 +933,160 @@ with tab2:
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor=card_bg,
                 font=dict(color=text_color),
-                xaxis=dict(showgrid=True, gridcolor=grid_color, title=""),
+                xaxis=dict(
+                    showgrid=True,
+                    gridcolor=grid_color,
+                    title="",
+                    tickformat="%d/%m/%Y",
+                    hoverformat="%d/%m/%Y %H:%M",
+                ),
                 yaxis=dict(showgrid=True, gridcolor=grid_color, title="Presión (Bar)"),
             )
             st.plotly_chart(
                 fig_pres,
-                use_container_width=True,
+                width="stretch",
                 key=f"chart_h_pres_{selected_machine}",
+            )
+
+            vista_tabla = st.selectbox(
+                "Vista de la tabla",
+                ["Resumen diario", "Mostrar todos los datos"],
+                key="history_table_view",
+            )
+
+            nombre_activo = MACHINE_DISPLAY_LABEL.get(
+                selected_machine, selected_machine
+            )
+            tabla_detalle = pd.DataFrame(
+                {
+                    "Fecha completa": df_hist["timestamp"],
+                    "Activo": nombre_activo,
+                    "Presión": df_hist["pressure_bar"],
+                    "Temperatura": df_hist["temperature_c"],
+                }
+            )
+
+            if vista_tabla == "Resumen diario":
+                datos_diarios = df_hist.copy()
+                datos_diarios["fecha"] = datos_diarios["timestamp"].dt.date
+                datos_diarios["pressure_bar"] = pd.to_numeric(
+                    datos_diarios["pressure_bar"], errors="coerce"
+                )
+                datos_diarios["temperature_c"] = pd.to_numeric(
+                    datos_diarios["temperature_c"], errors="coerce"
+                )
+
+                promedios = (
+                    datos_diarios.groupby("fecha", as_index=False)
+                    .agg(
+                        Presión=("pressure_bar", "mean"),
+                        Temperatura=("temperature_c", "mean"),
+                    )
+                    .sort_values("fecha")
+                )
+                promedio_por_fecha = promedios.set_index("fecha")
+                datos_diarios["promedio_presion"] = datos_diarios["fecha"].map(
+                    promedio_por_fecha["Presión"]
+                )
+                datos_diarios["promedio_temperatura"] = datos_diarios["fecha"].map(
+                    promedio_por_fecha["Temperatura"]
+                )
+
+                def porcentaje_desviacion(valor, promedio):
+                    if pd.isna(valor) or pd.isna(promedio):
+                        return float("nan")
+                    if promedio == 0:
+                        return 0.0 if valor == 0 else float("inf")
+                    return abs(valor - promedio) / abs(promedio) * 100
+
+                datos_diarios["desviacion_presion"] = datos_diarios.apply(
+                    lambda fila: porcentaje_desviacion(
+                        fila["pressure_bar"], fila["promedio_presion"]
+                    ),
+                    axis=1,
+                )
+                datos_diarios["desviacion_temperatura"] = datos_diarios.apply(
+                    lambda fila: porcentaje_desviacion(
+                        fila["temperature_c"], fila["promedio_temperatura"]
+                    ),
+                    axis=1,
+                )
+
+                filas_resumen = []
+                for _, promedio in promedios.iterrows():
+                    fecha = promedio["fecha"]
+                    filas_resumen.append(
+                        {
+                            "Fecha completa": fecha.strftime("%d/%m/%Y"),
+                            "Activo": nombre_activo,
+                            "Presión": promedio["Presión"],
+                            "Temperatura": promedio["Temperatura"],
+                            "Detalle": "Promedio diario",
+                            "Es desviación": False,
+                        }
+                    )
+
+                    lecturas_con_desviacion = datos_diarios[
+                        (datos_diarios["fecha"] == fecha)
+                        & (
+                            (datos_diarios["desviacion_presion"] >= 20)
+                            | (datos_diarios["desviacion_temperatura"] >= 20)
+                        )
+                    ]
+                    for _, lectura in lecturas_con_desviacion.iterrows():
+                        desviaciones = []
+                        if lectura["desviacion_presion"] >= 20:
+                            desviaciones.append(
+                                f"presión: {lectura['desviacion_presion']:.0f}%"
+                            )
+                        if lectura["desviacion_temperatura"] >= 20:
+                            desviaciones.append(
+                                f"temperatura: {lectura['desviacion_temperatura']:.0f}%"
+                            )
+                        filas_resumen.append(
+                            {
+                                "Fecha completa": lectura["timestamp"].strftime(
+                                    "%d/%m/%Y %H:%M:%S"
+                                ),
+                                "Activo": nombre_activo,
+                                "Presión": lectura["pressure_bar"],
+                                "Temperatura": lectura["temperature_c"],
+                                "Detalle": "Desviación del " + " y ".join(desviaciones),
+                                "Es desviación": True,
+                            }
+                        )
+
+                tabla_historial = pd.DataFrame(filas_resumen)
+            else:
+                tabla_historial = tabla_detalle.assign(
+                    Detalle="Lectura registrada", **{"Es desviación": False}
+                )
+
+            es_desviacion = tabla_historial.pop("Es desviación")
+            tabla_mostrada = tabla_historial.style.apply(
+                lambda fila: [
+                    (
+                        "background-color: #7f1d1d; color: #ffffff"
+                        if es_desviacion.loc[fila.name]
+                        else ""
+                    )
+                    for _ in fila
+                ],
+                axis=1,
+            )
+            st.dataframe(
+                tabla_mostrada,
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Presión": st.column_config.NumberColumn(
+                        "Presión", format="%.1f bar"
+                    ),
+                    "Temperatura": st.column_config.NumberColumn(
+                        "Temperatura", format="%.1f °C"
+                    ),
+                    "Detalle": st.column_config.TextColumn("Detalle"),
+                },
             )
 
         else:

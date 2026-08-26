@@ -19,7 +19,7 @@ El flujo principal del proyecto consta de tres capas:
 
 ## Estructura del proyecto
 
-- main.py: ejecuta el proceso principal de recopilación y registro de datos.
+- leer_telemetria.py: ejecuta el proceso de recopilación y registro de datos del compresor Sullair real.
 - communication.py: gestiona la conexión y la lectura de registros Modbus TCP.
 - database.py: administra la persistencia de datos en la nube y el respaldo local.
 - dashboard.py: presenta la información en un tablero de monitoreo.
@@ -52,162 +52,173 @@ El flujo principal del proyecto consta de tres capas:
    copy pass.env.example pass.env
    ```
 
-4. Editar pass.env con los valores reales de conexión y configuración.
+# Proyecto IIoT de monitoreo industrial
 
-5. Ajustar los parámetros de equipos en config.py si es necesario.
+## Brief para continuar el desarrollo con Gemini
 
-## Configuración 
+Este repositorio contiene un sistema de monitoreo industrial para activos conectados por Modbus TCP. La aplicación captura telemetría, la guarda en PostgreSQL/Supabase, utiliza SQLite como respaldo cuando falla la red y la muestra en un dashboard Streamlit.
 
+Al continuar el trabajo, conservar estas reglas:
 
-### Variables de entorno
+- Trabajar sobre la estructura y los nombres existentes.
+- No exponer ni modificar credenciales de `pass.env`.
+- Mantener separados los nombres técnicos de base de datos, las claves de configuración y los nombres visibles.
+- Validar cada cambio con `py -m py_compile dashboard.py`.
+- No reemplazar consultas PostgreSQL por `pd.read_sql` con conexiones DBAPI de psycopg2: el proyecto usa cursores mediante `read_postgres_dataframe()`.
+- Antes de cambiar el dashboard, revisar los cambios locales porque `dashboard.py` puede ser editado por el usuario o por un formateador.
 
-- DATABASE_URL: URL completa de conexión a PostgreSQL o Supabase.
-- DB_HOST: host de la base de datos en la nube.
-- DB_PORT: puerto de conexión.
-- DB_NAME: nombre de la base de datos.
-- DB_USER: usuario para la conexión.
-- DB_PASSWORD: contraseña del usuario.
-- DB_SSLMODE: modo SSL de la conexión.
+## Arquitectura y archivos
 
-> Mantener pass.env fuera del repositorio y no compartir credenciales sensibles.
+- `leer_telemetria.py`: lectura y decodificación Modbus del compresor Sullair; normaliza presión, temperatura, horas, estado y advertencias.
+- `communication.py`: conexión Modbus TCP y lectura robusta de registros.
+- `database.py`: persistencia en PostgreSQL/Supabase y respaldo local SQLite.
+- `dashboard.py`: aplicación Streamlit de monitoreo en vivo, alertas e historial.
+- `config.py`: IP, puerto, Slave ID, registros y factores de escala.
+- `main.py`: punto de entrada del proceso principal, si se utiliza.
+- `data_collection.py`, `scan_full.py`, `buscar_registro_corriente.py`: herramientas de exploración y diagnóstico Modbus.
+- `db_connection.py`: utilidades de conexión a la base de datos.
+- `logo_grupo_beniplast.png`: logo institucional usado en la cabecera del dashboard.
+- `logo_sullair.jpg`: recurso visual del equipo Sullair.
+- `pass.env.example`: plantilla de variables de entorno. `pass.env` contiene secretos y no debe compartirse.
+- `requirements.txt`: dependencias Python.
+- `iniciar_programa.bat`: inicio del sistema en Windows.
 
-### Configuración Modbus
+## Requisitos y ejecución
 
-En config.py se pueden ajustar los siguientes parámetros:
-- PORT_MODBUS
-- MODBUS_SLAVE_ID
-- IPs de los equipos
-- dirección inicial de lectura (REG_START_ADDRESS)
-- factores de escala (SCALE_*)
-
-## Ejecución
-
-### 1. Iniciar el logger principal
+Requisitos: Python 3.10 o superior, Windows PowerShell, acceso a Modbus TCP y una base PostgreSQL/Supabase.
 
 ```powershell
-python main.py
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy pass.env.example pass.env
 ```
 
-Este proceso lee continuamente los equipos, intenta persistir los datos en la nube y, si la red no está disponible, almacena los registros localmente.
-
-### 2. Iniciar el dashboard
+Configurar `pass.env` y luego ejecutar en terminales separadas:
 
 ```powershell
+python leer_telemetria.py
 py -m streamlit run dashboard.py
 ```
 
-El dashboard permite visualizar:
-- el estado operativo de cada máquina;
-- mediciones en tiempo real;
-- alertas por temperatura y presión;
-- datos históricos y tendencias.
+En Windows, si `python` no está disponible en un terminal pero existe el launcher, usar `py`.
 
-## Comportamiento del sistema
+## Configuración de conexión
 
-- Si la conexión a la nube está disponible, los datos se insertan directamente en PostgreSQL.
-- Si la red falla, el sistema usa el respaldo local en backup_mantenimiento.db.
-- El programa reintenta automáticamente en los siguientes ciclos de lectura.
-- Si un equipo no responde o se desconecta, se registran lecturas con valores nulos y se activa la alerta correspondiente.
+El dashboard intenta obtener `DATABASE_URL` desde `st.secrets` y, si no existe, desde `pass.env`/variables de entorno. En Streamlit Cloud se recomienda configurar `DATABASE_URL` en Settings → Secrets.
 
-## Respaldo local
+También se admite `TIMEOUT_DESCONEXION`, expresado en segundos. El valor utilizado por defecto en el código es `200` segundos.
 
-El sistema genera un archivo SQLite denominado backup_mantenimiento.db, el cual almacena la tabla telemetria_backup con los registros pendientes.
+Nunca incluir valores reales de `DATABASE_URL`, usuarios, contraseñas o tokens en documentación, commits o mensajes.
 
-## Solución de problemas
+## Nombres de equipos y umbrales
 
-- Error ModuleNotFoundError: ejecutar nuevamente pip install -r requirements.txt.
-- Dashboard sin datos: verificar que DATABASE_URL esté correctamente definida en pass.env.
-- Sin lectura Modbus: comprobar la IP del equipo y el puerto en config.py.
-- Sin conexión a la nube: el sistema seguirá operando en modo offline y registrará datos localmente.
+Los nombres no tienen que ser iguales. Se usan tres niveles:
+
+| Propósito | Ejemplo |
+|---|---|
+| Nombre técnico guardado en DB | `SULLAIR_COMPRESSOR` |
+| Clave de alertas | `SULLAIR SE1507NEW` |
+| Nombre visible | `Compresor Sullair` |
+
+El mapeo vigente en `dashboard.py` es:
+
+```python
+MACHINE_DISPLAY_LABEL = {
+    "AERCOM_22P": "Compresor Aercom",
+    "SULLAIR_COMPRESSOR": "Compresor Sullair",
+    "CHILLER_TRANE": "Chiller Trane",
+}
+
+MACHINE_ALERT_KEY = {
+    "AERCOM_22P": "AERCOM 22P",
+    "SULLAIR_COMPRESSOR": "SULLAIR SE1507NEW",
+    "CHILLER_TRANE": "CHILLER TRANE CGAX030",
+}
+```
+
+Los únicos umbrales efectivos son los definidos en `PREVENTIVE_ALERTS`. No existe un bloque de defaults: cada equipo debe tener `max_temp`, `min_temp`, `max_press` y `min_press`. Usar `None` en `min_press` significa que no se controla presión mínima para ese equipo.
+
+Configuración actual documentada:
+
+| Equipo | Temperatura | Presión máxima | Presión mínima |
+|---|---:|---:|---:|
+| Aercom | 65 a 95 °C | 7.5 bar | 6.5 bar |
+| Sullair | 65 a 95 °C | 6.9 bar | 6.5 bar |
+| Chiller Trane | 4.5 a 12 °C | 27 bar | 6.5 bar |
+
+Si se cambia un umbral, modificar `PREVENTIVE_ALERTS`, no `MACHINE_DISPLAY_LABEL`. La función `get_preventive_alerts()` accede directamente a la configuración del equipo y no aplica valores alternativos.
+
+## Dashboard actual
+
+`dashboard.py` tiene dos pestañas:
+
+### Monitoreo en Vivo
+
+- Muestra cada activo dentro de una tarjeta.
+- Indica estado `ENCENDIDO`, `APAGADO` o `SIN CONEXIÓN`.
+- Actualiza el fragmento cada 10 segundos.
+- Presenta gauges de `Presión Línea` y `Temperatura`, horas de marcha y Delta P del filtro separador.
+- Los gauges tienen altura fija de 300 px, valor central de 34 px, título de 34 px y escala de 19 px.
+- La presión y la temperatura se convierten a `float` antes de compararlas o restarlas.
+- Las alertas de presión y temperatura aparecen debajo de su gauge correspondiente.
+- Las advertencias de mantenimiento aparecen en un cartel `ALARMA MANTENIMIENTO`; al pasar el cursor se muestran mediante tooltip.
+- Las fallas de parada y pérdida de comunicación se muestran en sus banners correspondientes.
+
+### Historial de Tendencias
+
+- Permite seleccionar activo y período.
+- Muestra dos gráficos: evolución térmica y presión.
+- La tabla inicia en `Resumen diario`.
+- Agrupa las lecturas por fecha y muestra el promedio diario de presión y temperatura.
+- Lecturas cuya presión o temperatura se separa al menos un 20% del promedio diario aparecen debajo del día correspondiente, en rojo, con la hora y el porcentaje de desviación.
+- El porcentaje se calcula como `abs(valor - promedio) / abs(promedio) * 100`.
+- El selector `Mostrar todos los datos` permite revisar todas las lecturas horarias.
+- La tabla contiene fecha completa, activo, presión, temperatura y detalle.
+
+## Correcciones importantes realizadas
+
+- Se eliminó `DEFAULT_PREVENTIVE_ALERTS`, que podía ocultar una configuración faltante aplicando valores no deseados.
+- Se corrigió el mapeo entre `SULLAIR_COMPRESSOR`, `SULLAIR SE1507NEW` y `Compresor Sullair`.
+- Se corrigió `TypeError: unsupported operand type(s) for -: 'float' and 'decimal.Decimal'` convirtiendo las presiones provenientes de PostgreSQL a `float`.
+- Se reemplazaron todos los `use_container_width=True` por `width="stretch"`, según la API actual de Streamlit.
+- Se reemplazó `pd.read_sql` sobre conexiones psycopg2 por `read_postgres_dataframe()`, evitando el warning de compatibilidad de Pandas.
+- Se separaron las alertas de presión y temperatura de las advertencias de mantenimiento.
+- Las alertas de presión y temperatura ahora se muestran debajo del gauge correspondiente.
+- Las advertencias de mantenimiento volvieron al cartel con tooltip, en lugar de mezclarse en un banner único.
+- Se añadió una cabecera institucional con el logo `logo_grupo_beniplast.png` y el título `Sistema de Monitoreo Industrial`.
+- Se ampliaron los textos de las pestañas, las etiquetas de métricas y los valores numéricos.
+- Se intentó estabilizar el layout responsive de Plotly frente al zoom del navegador fijando altura, márgenes y ancho mínimo de columnas.
+
+## Problemas conocidos y precauciones
+
+- El zoom del navegador puede afectar el layout de Streamlit/Plotly; no usar CSS global que fuerce `overflow: hidden` sobre los SVG de Plotly porque puede recortar títulos, números o escalas.
+- Si un equipo no aparece o falla al resolver alertas, verificar primero que su clave técnica esté en `ORDEN_PLANTA_KEYS`, `MACHINE_DISPLAY_LABEL`, `MACHINE_ALERT_KEY` y `PREVENTIVE_ALERTS`.
+- Si `pressure_sink_bar` es `NULL`, Delta P del filtro separador queda como `N/D`; la presión de línea y temperatura no dependen de esa columna.
+- Los registros históricos de Aercom y Chiller pueden no tener `pressure_sink_bar`; no inventar Delta P para esos registros.
+- Los diagnósticos actuales del editor muestran advertencias preexistentes sobre `except Exception`, `dict()` y `datetime.now()`; no son errores de sintaxis ni impiden ejecutar el dashboard.
+
+## Validación mínima
+
+Después de modificar Python:
+
+```powershell
+py -m py_compile dashboard.py
+```
+
+Para verificar que no reaparezcan avisos antiguos:
+
+```powershell
+rg "use_container_width|pd\.read_sql" dashboard.py
+```
+
+La búsqueda debería no devolver resultados.
 
 ## Seguridad
 
-- No subir pass.env al repositorio.
-- Si el archivo se compartió de forma accidental, cambiar la contraseña de la base de datos y eliminarlo del historial de Git.
-- Evitar compartir credenciales de base de datos en entornos públicos.
-
-## Mejoras incluidas
-
-- Normalización de columnas para análisis consistente.
-- Uso de logging para trazabilidad y control de errores.
-- Lectura robusta de datos Modbus.
-- Respaldo local en SQLite ante fallos de red.
-- Panel de monitoreo con visualización clara del estado de la planta.
-
-
-## Notas de despliegue y correcciones recientes
-
-Se documentan aquí cambios recientes que resolvieron problemas en Streamlit Cloud y comportamientos inesperados del dashboard:
-
-- `get_database_url()` ahora intenta leer `st.secrets.get("DATABASE_URL")` y, si no está disponible, cae en la variable de entorno `DATABASE_URL` (cargada desde `pass.env`). Esto evita errores cuando no hay `secrets.toml` en el entorno de ejecución.
-
-- Debug seguro en el sidebar: el expander de Debug DB ejecuta ahora una consulta inline usando una conexión nueva creada con `psycopg2.connect(db_url, connect_timeout=5)` para verificar acceso y mostrar una tabla de estado por activo. Anteriormente se invocaba una función (`get_latest_data()`) que en algunos despliegues se definía más abajo en el archivo, provocando `NameError` durante la ejecución top-down de Streamlit.
-
-- Evitar cerrar la conexión cacheada: el debug abre y cierra una conexión dedicada para diagnóstico. NO se cierra la conexión devuelta por `init_connection()` (anotada con `@st.cache_resource`) porque esa conexión es compartida por la app y cerrarla producía `psycopg2.InterfaceError` en ejecuciones concurrentes.
-
-- Umbral por defecto de desconexión: `TIMEOUT_DESCONEXION` se aumentó a `200` segundos para evitar falsos positivos de "SIN RECEPCIÓN" cuando la telemetría tiene cierta latencia. Puede ser sobrescrito poniendo en `pass.env` o en `st.secrets` la variable `TIMEOUT_DESCONEXION` (valor en segundos).
-
-Recomendaciones para despliegue en Streamlit Cloud
-
-- Añadir `DATABASE_URL` en Secrets de Streamlit (Settings → Secrets) para evitar exponer credenciales en `pass.env`.
-- Si se quiere ajustar el comportamiento sin tocar código, definir `TIMEOUT_DESCONEXION` en `pass.env` o en `st.secrets`.
-- Consultar el expander "🔧 Debug DB (solo admin)" en el sidebar para ver: fuente del secret, host:port (enmascarado), test de conexión y tabla con `machine`, `timestamp`, `tz`, `pressure_bar`, `seconds_since`.
-
-Si querés que documente pasos para agregar `TIMEOUT_DESCONEXION` desde la UI del dashboard en lugar de usar la variable de entorno, lo agrego en la próxima versión del README.
-
-
-## Comunicación RS485/Modbus del compresor Sullair
-
-### Parámetros testeados
-
-Las pruebas se realizaron mediante el gateway HF2211 conectado a:
-
-- Gateway: `192.168.0.128`
-- Puerto Modbus TCP: `502`
-- Protocolo: Modbus TCP nativo
-- Modo físico: Half Duplex
-- Configuración serie validada: `19200-8-E-1`
-  - Baud rate: `19200`
-  - Bits de datos: `8`
-  - Paridad: Even
-  - Bits de parada: `1`
-- ID Modbus confirmado: `1`
-
-Durante las pruebas también se utilizaron las etiquetas:
-
-- `9600-8-N-1`
-- `9600-8-E-1`
-- `19200-8-E-1`
-
-
-### Búsqueda del ID Modbus
-
-El script `scan_full.py` recorre los IDs del `1` al `247` y consulta el registro `258` mediante la función `0x03`.
-
-Un ID se considera detectado cuando responde:
-
-- Con una respuesta válida `0x03`.
-- Con una excepción Modbus `0x83`, ya que esto confirma que el dispositivo existe aunque el registro o la función no sean válidos.
-
-Ejecutar:
-
-```powershell
-python scan_full.py
-```
-
-El resultado se guarda en `scan_log.csv`.
-
-### Exploración de registros
-
-`data_collection.py` prueba las funciones:
-
-- `0x03`: Holding Registers.
-- `0x04`: Input Registers.
-
-Actualmente explora los registros `0` a `100` usando el ID `1`.
-
-```powershell
-python data_collection.py
+- No subir `pass.env` ni bases locales con datos sensibles.
+- Mantener `pass.env.example` sin secretos reales.
+- Si una credencial fue expuesta, revocarla y cambiarla.
 ```
 
 ### Trama Modbus TCP en hexadecimal

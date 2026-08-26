@@ -1,3 +1,4 @@
+import json
 import socket
 import time
 from datetime import datetime
@@ -151,6 +152,18 @@ def main():
     time.sleep(0.03)
     warnb_raw = leer_registro(ADDR_WARNB)
 
+    # No guardar una muestra parcial: un timeout Modbus no debe convertirse en ceros.
+    lecturas_criticas = (
+        temp_raw,
+        p_sumidero_raw,
+        p_linea_raw,
+        run_hi,
+        run_lo,
+    )
+    if any(valor is None for valor in lecturas_criticas):
+        print("⚠️ Muestra descartada: lectura Modbus incompleta.")
+        return
+
     # Conversiones
     temp_c = ((temp_raw - 512) / 28.8) if temp_raw else 0.0
     p_linea_bar = ajustar_presion((p_linea_raw / 232.0) if p_linea_raw else 0.0)
@@ -171,8 +184,12 @@ def main():
     # Guarda en la nube y utiliza SQLite automáticamente si falla la conexión.
     datos_telemetria = {
         "pressure_bar": p_linea_bar,
+        "pressure_sink_bar": p_sumidero_bar,
         "temperature_c": temp_c,
         "run_hours": horas_marcha,
+        "operating_state": estado_str,
+        "shutdown_code": sdc_code,
+        "warnings": json.dumps(lista_alertas, ensure_ascii=False),
     }
 
     try:
