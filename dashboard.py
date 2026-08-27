@@ -532,6 +532,7 @@ def get_latest_data():
     return df
 
 
+@st.cache_data(ttl=60)
 def get_historical_data(machine, start_date, end_date):
     conn = init_connection()
     query = """
@@ -974,29 +975,58 @@ with tab2:
     df_latest_names = get_latest_data()
 
     if not df_latest_names.empty:
-        machine_list = df_latest_names["machine_key"].tolist()
-        selected_machine = st.selectbox(
-            "Seleccione el activo a analizar:",
-            machine_list,
-            format_func=lambda x: MACHINE_DISPLAY_LABEL.get(x, x),
-            key="select_history_asset",
-        )
+        col_select_asset, col_select_period = st.columns([1, 1])
+        with col_select_asset:
+            machine_list = df_latest_names["machine_key"].tolist()
+            selected_machine = st.selectbox(
+                "Seleccione el activo a analizar:",
+                machine_list,
+                format_func=lambda x: MACHINE_DISPLAY_LABEL.get(x, x),
+                key="select_history_asset",
+            )
+        with col_select_period:
+            periodo_opcion = st.selectbox(
+                "Período a consultar:",
+                [
+                    "📅 Hoy",
+                    "⏱️ Últimas 24 horas",
+                    "📊 Últimos 3 días",
+                    "📆 Últimos 7 días",
+                    "🗓️ Personalizado",
+                ],
+                index=0,
+                key="history_period_preset",
+            )
 
-        default_end_date = datetime.now().date()
-        default_start_date = default_end_date - timedelta(days=6)
-        with st.expander("Configurar período", expanded=False):
-            start_date = st.date_input(
-                "Fecha inicial",
-                value=default_start_date,
-                format="DD/MM/YYYY",
-                key="history_start_date",
-            )
-            end_date = st.date_input(
-                "Fecha final",
-                value=default_end_date,
-                format="DD/MM/YYYY",
-                key="history_end_date",
-            )
+        today = datetime.now(DATA_TIMEZONE).date()
+        if periodo_opcion == "📅 Hoy":
+            start_date = today
+            end_date = today
+        elif periodo_opcion == "⏱️ Últimas 24 horas":
+            start_date = today - timedelta(days=1)
+            end_date = today
+        elif periodo_opcion == "📊 Últimos 3 días":
+            start_date = today - timedelta(days=2)
+            end_date = today
+        elif periodo_opcion == "📆 Últimos 7 días":
+            start_date = today - timedelta(days=6)
+            end_date = today
+        else:  # Personalizado
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                start_date = st.date_input(
+                    "Fecha inicial",
+                    value=today - timedelta(days=1),
+                    format="DD/MM/YYYY",
+                    key="history_start_date",
+                )
+            with col_d2:
+                end_date = st.date_input(
+                    "Fecha final",
+                    value=today,
+                    format="DD/MM/YYYY",
+                    key="history_end_date",
+                )
 
         if start_date > end_date:
             st.error("La fecha inicial no puede ser posterior a la fecha final.")
@@ -1005,8 +1035,11 @@ with tab2:
         df_hist = get_historical_data(selected_machine, start_date, end_date)
 
         if not df_hist.empty:
+            nombre_activo = MACHINE_DISPLAY_LABEL.get(
+                selected_machine, selected_machine
+            )
             st.markdown(
-                f"#### Historial analítico: **{selected_machine}** (`{len(df_hist)} registros`)"
+                f"#### Historial analítico: **{nombre_activo}** (`{len(df_hist):,} registros cargados`)"
             )
             st.caption(
                 f"Período mostrado: {df_hist['timestamp'].min():%d/%m/%Y %H:%M} "
@@ -1019,7 +1052,7 @@ with tab2:
                 x="timestamp",
                 y="temperature_c",
                 title="📈 Evolución Térmica",
-                markers=True,
+                markers=True if len(df_hist) < 150 else False,
             )
             fig_temp.update_traces(line_color="#FF5252", line_width=2)
             fig_temp.update_layout(
@@ -1052,7 +1085,7 @@ with tab2:
                 x="timestamp",
                 y="pressure_bar",
                 title="📉 Comportamiento de Presión",
-                markers=True,
+                markers=True if len(df_hist) < 150 else False,
             )
             fig_pres.update_traces(line_color="#00E676", line_width=2)
             fig_pres.update_layout(
@@ -1077,25 +1110,15 @@ with tab2:
                 key=f"chart_h_pres_{selected_machine}",
             )
 
-            vista_tabla = st.selectbox(
-                "Vista de la tabla",
-                ["Resumen diario", "Mostrar todos los datos"],
-                key="history_table_view",
-            )
+            col_view_opt, col_limit_opt = st.columns([1, 1])
+            with col_view_opt:
+                vista_tabla = st.selectbox(
+                    "Vista de la tabla",
+                    ["Resumen diario (recomendado)", "Mostrar todos los datos crudos"],
+                    key="history_table_view",
+                )
 
-            nombre_activo = MACHINE_DISPLAY_LABEL.get(
-                selected_machine, selected_machine
-            )
-            tabla_detalle = pd.DataFrame(
-                {
-                    "Fecha completa": df_hist["timestamp"],
-                    "Activo": nombre_activo,
-                    "Presión": df_hist["pressure_bar"],
-                    "Temperatura": df_hist["temperature_c"],
-                }
-            )
-
-            if vista_tabla == "Resumen diario":
+            if vista_tabla == "Resumen diario (recomendado)":
                 datos_diarios = df_hist.copy()
                 datos_diarios["fecha"] = datos_diarios["timestamp"].dt.date
                 datos_diarios["pressure_bar"] = pd.to_numeric(
@@ -1183,15 +1206,40 @@ with tab2:
                                 "Detalle": "Desviación del " + " y ".join(desviaciones),
                                 "Es desviación": True,
                             }
-                        )
+                            )
 
                 tabla_historial = pd.DataFrame(filas_resumen)
+                es_desviacion = tabla_historial.pop("Es desviación")
             else:
-                tabla_historial = tabla_detalle.assign(
-                    Detalle="Lectura registrada", **{"Es desviación": False}
-                )
+                with col_limit_opt:
+                    if len(df_hist) > 500:
+                        limite_filas = st.selectbox(
+                            "Registros a mostrar en tabla:",
+                            ["Últimos 500", "Últimos 1.000", "Todos los registros"],
+                            index=0,
+                            key="history_raw_limit",
+                        )
+                        if limite_filas == "Últimos 500":
+                            df_hist_sub = df_hist.tail(500)
+                        elif limite_filas == "Últimos 1.000":
+                            df_hist_sub = df_hist.tail(1000)
+                        else:
+                            df_hist_sub = df_hist
+                    else:
+                        df_hist_sub = df_hist
 
-            es_desviacion = tabla_historial.pop("Es desviación")
+                tabla_detalle = pd.DataFrame(
+                    {
+                        "Fecha completa": df_hist_sub["timestamp"].dt.strftime("%d/%m/%Y %H:%M:%S"),
+                        "Activo": nombre_activo,
+                        "Presión": df_hist_sub["pressure_bar"],
+                        "Temperatura": df_hist_sub["temperature_c"],
+                        "Detalle": "Lectura registrada",
+                    }
+                )
+                tabla_historial = tabla_detalle
+                es_desviacion = pd.Series([False] * len(tabla_historial))
+
             tabla_mostrada = tabla_historial.style.apply(
                 lambda fila: [
                     (
@@ -1220,5 +1268,6 @@ with tab2:
 
         else:
             st.info(
-                f"El activo {selected_machine} no registra datos históricos almacenados."
+                f"El activo {selected_machine} no registra datos históricos almacenados en el período seleccionado."
             )
+
