@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import psycopg2
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 ### UMBRALES DE ALERTA CRÍTICA (Se pueden ajustar según la planta)
@@ -79,13 +80,55 @@ def get_preventive_alerts(alert_key: str) -> dict:
     }
 
 
+### ---- alarma sonora ---- ###
+
+# --- Inicializar registro de alarmas reconocidas (evita re-sonar si ya se presionó Enter) ---
+if "acknowledged_alarms" not in st.session_state:
+    st.session_state["acknowledged_alarms"] = set()
+
+
+# --- Función para reproducir el audio de la sirena ---
+def trigger_alarm_sound():
+    js_code = """
+    <script>
+    if (!window.alarmInterval) {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        window.alarmInterval = setInterval(() => {
+            if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }, 700);
+    }
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+
+def stop_alarm_sound():
+    js_code = """
+    <script>
+    if (window.alarmInterval) {
+        clearInterval(window.alarmInterval);
+        window.alarmInterval = null;
+    }
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+
 # ==============================================================================
 # 1. CONFIGURACIÓN DE PÁGINA (¡Restaurada!)
 # ==============================================================================
 st.set_page_config(
     page_title="Beniplast | Monitoreo Industrial", page_icon="B", layout="wide"
 )
-
 # ==============================================================================
 # MODO OSCURO FIJO
 # ==============================================================================
@@ -601,12 +644,49 @@ def draw_pressure_gauge(value, font_color, track_color):
 # ==============================================================================
 # 7. FRAGMENTO DE MONITOREO EN VIVO
 # ==============================================================================
+# --- FUNCIONES AUXILIARES DE AUDIO (Colócalas fuera o arriba de la función principal) ---
+if "acknowledged_alarms" not in st.session_state:
+    st.session_state["acknowledged_alarms"] = set()
+
+
 @st.fragment(run_every=10)
+def trigger_alarm_sound():
+    js_code = """
+    <script>
+    if (!window.alarmInterval) {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        window.alarmInterval = setInterval(() => {
+            if (audioCtx.state === 'suspended') { audioCtx.resume(); }
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.3);
+        }, 700);
+    }
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+
+def stop_alarm_sound():
+    js_code = """
+    <script>
+    if (window.alarmInterval) {
+        clearInterval(window.alarmInterval);
+        window.alarmInterval = null;
+    }
+    </script>
+    """
+    components.html(js_code, height=0, width=0)
+
+
 def render_live_monitoring():
     df_latest = get_latest_data()
-    # Tiempo (segundos) que consideramos para marcar pérdida de comunicación.
-    # Valor por defecto aumentado a 200s; puede sobreescribirse desde el entorno
-    # con la variable TIMEOUT_DESCONEXION.
     TIMEOUT_DESCONEXION = int(os.getenv("TIMEOUT_DESCONEXION", "200"))
 
     if not df_latest.empty:
@@ -648,6 +728,7 @@ def render_live_monitoring():
                     if pd.notna(row["shutdown_code"])
                     else None
                 )
+
                 warnings = []
                 if pd.notna(row["warnings"]):
                     try:
@@ -680,17 +761,11 @@ def render_live_monitoring():
                         unsafe_allow_html=True,
                     )
 
-                # Falla de parada: se muestra inmediatamente debajo del estado.
-                if shutdown_code not in (None, 0):
-                    st.markdown(
-                        f"<div class='industrial-alert-failure'>🚨 FALLA DE PARADA: código {shutdown_code}</div>",
-                        unsafe_allow_html=True,
-                    )
-
-                # 🚨 ALERTAS Y ADVERTENCIAS
+                # 🚨 CÁLCULO DE UMBRALES Y ALERTAS PREVENTIVAS
                 temperature_alert = None
                 pressure_alert = None
                 maintenance_alerts = []
+
                 if not is_online:
                     st.markdown(
                         "<div class='industrial-alert-compact'>⚠️ Pérdida de comunicación: no se reciben telemetrías válidas.</div>",
@@ -699,11 +774,13 @@ def render_live_monitoring():
                 else:
                     alert_key = MACHINE_ALERT_KEY[str(row["machine_key"])]
                     thresholds = get_preventive_alerts(alert_key)
+
                     if temp is not None:
                         if temp > thresholds["max_temp"]:
                             temperature_alert = f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
                         elif temp < thresholds["min_temp"]:
                             temperature_alert = f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
+
                     if press is not None:
                         if (
                             thresholds["min_press"] is not None
@@ -712,6 +789,7 @@ def render_live_monitoring():
                             pressure_alert = f"Presión baja: {press} Bar (Umbral: <{thresholds['min_press']} Bar)"
                         elif press > thresholds["max_press"]:
                             pressure_alert = f"Alta Presión: {press} Bar (Umbral: >{thresholds['max_press']} Bar)"
+
                     maintenance_alerts.extend(
                         warning
                         for warning in warnings
@@ -725,6 +803,57 @@ def render_live_monitoring():
                             f"<span class='maintenance-badge' title=\"{alert_tooltip}\">🔧 ALARMA MANTENIMIENTO</span>",
                             unsafe_allow_html=True,
                         )
+
+                # =========================================================================
+                # 🔊 INTEGRACIÓN DE LA LÓGICA DE ALARMA SONORA Y SILENCIAMIENTO POR COMPRESOR
+                # =========================================================================
+                compresor_id = str(row["machine_key"])
+
+                # Se dispara si hay temperatura fuera de rango, presión alta o falla de parada activa
+                condicion_temp = temperature_alert is not None
+                condicion_presion = pressure_alert is not None
+                condicion_falla = shutdown_code not in (None, 0)
+
+                alarma_critica = condicion_temp or condicion_presion or condicion_falla
+
+                # Limpiar registro si el compresor recupera la normalidad
+                if (
+                    not alarma_critica
+                    and compresor_id in st.session_state["acknowledged_alarms"]
+                ):
+                    st.session_state["acknowledged_alarms"].remove(compresor_id)
+
+                if alarma_critica:
+                    is_ack = compresor_id in st.session_state["acknowledged_alarms"]
+
+                    # Emitir o cortar sonido según si el operador ya hizo ACK
+                    if not is_ack:
+                        trigger_alarm_sound()
+                    else:
+                        stop_alarm_sound()
+
+                    # Mostrar Falla de parada inmediatamente si existe
+                    if condicion_falla:
+                        st.markdown(
+                            f"<div class='industrial-alert-failure'>🚨 FALLA DE PARADA: código {shutdown_code}</div>",
+                            unsafe_allow_html=True,
+                        )
+
+                    # Caja de interacción para mutear la chicharra presionando Enter
+                    if not is_ack:
+                        input_ack = st.text_input(
+                            f"🔕 Presiona ENTER para silenciar alarma del compresor {row['machine_label']}:",
+                            key=f"ack_input_{compresor_id}",
+                            placeholder="Haz clic aquí y presiona Enter...",
+                        )
+                        if input_ack != "":
+                            st.session_state["acknowledged_alarms"].add(compresor_id)
+                            st.rerun()
+                    else:
+                        st.info(
+                            "🔕 Alarma sonora silenciada por el operador para este activo."
+                        )
+                # =========================================================================
 
                 # 📊 CUADRÍCULA DE MEDIDORES Y MÉTRICAS
                 col_press, col_temp, col_hours = st.columns(3, gap="small")
