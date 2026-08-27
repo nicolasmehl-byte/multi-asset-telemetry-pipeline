@@ -553,7 +553,11 @@ def get_historical_data(machine, start_date, end_date):
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         if df["timestamp"].dt.tz is None:
             df["timestamp"] = df["timestamp"].dt.tz_localize(DATA_TIMEZONE)
-        df = df.sort_values("timestamp")
+        df["pressure_bar"] = pd.to_numeric(df["pressure_bar"], errors="coerce")
+        df["temperature_c"] = pd.to_numeric(df["temperature_c"], errors="coerce")
+        if "pressure_sink_bar" in df.columns:
+            df["pressure_sink_bar"] = pd.to_numeric(df["pressure_sink_bar"], errors="coerce")
+        df = df.sort_values("timestamp").reset_index(drop=True)
     return df
 
 
@@ -1052,7 +1056,7 @@ with tab2:
                 x="timestamp",
                 y="temperature_c",
                 title="📈 Evolución Térmica",
-                markers=True if len(df_hist) < 150 else False,
+                markers=bool(len(df_hist) < 150),
             )
             fig_temp.update_traces(line_color="#FF5252", line_width=2)
             fig_temp.update_layout(
@@ -1085,7 +1089,7 @@ with tab2:
                 x="timestamp",
                 y="pressure_bar",
                 title="📉 Comportamiento de Presión",
-                markers=True if len(df_hist) < 150 else False,
+                markers=bool(len(df_hist) < 150),
             )
             fig_pres.update_traces(line_color="#00E676", line_width=2)
             fig_pres.update_layout(
@@ -1121,12 +1125,6 @@ with tab2:
             if vista_tabla == "Resumen diario (recomendado)":
                 datos_diarios = df_hist.copy()
                 datos_diarios["fecha"] = datos_diarios["timestamp"].dt.date
-                datos_diarios["pressure_bar"] = pd.to_numeric(
-                    datos_diarios["pressure_bar"], errors="coerce"
-                )
-                datos_diarios["temperature_c"] = pd.to_numeric(
-                    datos_diarios["temperature_c"], errors="coerce"
-                )
 
                 promedios = (
                     datos_diarios.groupby("fecha", as_index=False)
@@ -1167,9 +1165,14 @@ with tab2:
                 filas_resumen = []
                 for _, promedio in promedios.iterrows():
                     fecha = promedio["fecha"]
+                    fecha_str = (
+                        fecha.strftime("%d/%m/%Y")
+                        if hasattr(fecha, "strftime")
+                        else str(fecha)
+                    )
                     filas_resumen.append(
                         {
-                            "Fecha completa": fecha.strftime("%d/%m/%Y"),
+                            "Fecha completa": fecha_str,
                             "Activo": nombre_activo,
                             "Presión": promedio["Presión"],
                             "Temperatura": promedio["Temperatura"],
@@ -1185,7 +1188,8 @@ with tab2:
                             | (datos_diarios["desviacion_temperatura"] >= 20)
                         )
                     ]
-                    for _, lectura in lecturas_con_desviacion.iterrows():
+                    # Limitar muestras desviadas a un número manejable por día
+                    for _, lectura in lecturas_con_desviacion.head(30).iterrows():
                         desviaciones = []
                         if lectura["desviacion_presion"] >= 20:
                             desviaciones.append(
@@ -1206,10 +1210,9 @@ with tab2:
                                 "Detalle": "Desviación del " + " y ".join(desviaciones),
                                 "Es desviación": True,
                             }
-                            )
+                        )
 
                 tabla_historial = pd.DataFrame(filas_resumen)
-                es_desviacion = tabla_historial.pop("Es desviación")
             else:
                 with col_limit_opt:
                     if len(df_hist) > 500:
@@ -1228,43 +1231,52 @@ with tab2:
                     else:
                         df_hist_sub = df_hist
 
-                tabla_detalle = pd.DataFrame(
+                tabla_historial = pd.DataFrame(
                     {
-                        "Fecha completa": df_hist_sub["timestamp"].dt.strftime("%d/%m/%Y %H:%M:%S"),
+                        "Fecha completa": df_hist_sub["timestamp"].dt.strftime(
+                            "%d/%m/%Y %H:%M:%S"
+                        ),
                         "Activo": nombre_activo,
                         "Presión": df_hist_sub["pressure_bar"],
                         "Temperatura": df_hist_sub["temperature_c"],
                         "Detalle": "Lectura registrada",
+                        "Es desviación": False,
                     }
                 )
-                tabla_historial = tabla_detalle
-                es_desviacion = pd.Series([False] * len(tabla_historial))
 
-            tabla_mostrada = tabla_historial.style.apply(
-                lambda fila: [
-                    (
-                        "background-color: #7f1d1d; color: #ffffff"
-                        if es_desviacion.loc[fila.name]
-                        else ""
-                    )
-                    for _ in fila
-                ],
-                axis=1,
-            )
-            st.dataframe(
-                tabla_mostrada,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Presión": st.column_config.NumberColumn(
-                        "Presión", format="%.1f bar"
-                    ),
-                    "Temperatura": st.column_config.NumberColumn(
-                        "Temperatura", format="%.1f °C"
-                    ),
-                    "Detalle": st.column_config.TextColumn("Detalle"),
-                },
-            )
+            # Formateo y renderizado completamente a prueba de errores
+            if not tabla_historial.empty:
+                tabla_historial = tabla_historial.reset_index(drop=True)
+                es_desviacion_list = tabla_historial["Es desviación"].tolist()
+                tabla_display = tabla_historial.drop(
+                    columns=["Es desviación"], errors="ignore"
+                )
+
+                tabla_mostrada = tabla_display.style.apply(
+                    lambda _: [
+                        (
+                            "background-color: #7f1d1d; color: #ffffff"
+                            if es_desviacion_list[i]
+                            else ""
+                        )
+                        for i in range(len(tabla_display))
+                    ],
+                    axis=0,
+                )
+                st.dataframe(
+                    tabla_mostrada,
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Presión": st.column_config.NumberColumn(
+                            "Presión", format="%.1f bar"
+                        ),
+                        "Temperatura": st.column_config.NumberColumn(
+                            "Temperatura", format="%.1f °C"
+                        ),
+                        "Detalle": st.column_config.TextColumn("Detalle"),
+                    },
+                )
 
         else:
             st.info(
