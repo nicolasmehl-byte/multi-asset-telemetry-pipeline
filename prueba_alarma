@@ -1,0 +1,96 @@
+import threading
+import time
+import winsound
+
+# Memoria global para detectar la transición de estado (evita repetición continua)
+_alarma_activa_previa = False
+
+
+def _sonar_patron_alarma():
+    """
+    Reproduce el sonido seleccionado.
+    Sonidos nativos de Windows: 'SystemExclamation', 'SystemHand', 'SystemNotification', 'SystemAsterisk'
+    """
+    # === OPCIÓN 1: Sonido nativo de Windows (Recomendado) ===
+    winsound.PlaySound("SystemNotification", winsound.SND_ALIAS)
+
+    # === OPCIÓN 2: Archivo .wav propio (Descomentar para usar) ===
+    # winsound.PlaySound("alerta.wav", winsound.SND_FILENAME | winsound.SND_ASYNC)
+
+
+def disparar_sonido_alarma():
+    """Lanza la alarma en un hilo secundario para no detener la lectura de datos."""
+    t = threading.Thread(target=_sonar_patron_alarma, daemon=True)
+    t.start()
+
+
+def verificar_y_notificar_alarmas(
+    temperatura: float,
+    presion: float,
+    falla_parada: bool,
+    temp_max: float = 95.0,
+    presion_max: float = 8.5,
+) -> dict:
+    """
+    Evalúa los parámetros del compresor.
+    Dispara el sonido únicamente cuando la máquina entra en estado de alarma.
+    """
+    global _alarma_activa_previa
+
+    # Evaluación de los umbrales operativos
+    alerta_temp = temperatura >= temp_max
+    alerta_presion = presion >= presion_max
+    alerta_falla = bool(falla_parada)
+
+    alarma_actual = alerta_temp or alerta_presion or alerta_falla
+
+    # Solo suena en el momento exacto en que pasa de OK (False) a ALERTA (True)
+    if alarma_actual and not _alarma_activa_previa:
+        disparar_sonido_alarma()
+
+    # Guardar el estado para el siguiente ciclo de lectura
+    _alarma_activa_previa = alarma_actual
+
+    return {
+        "alarma_activa": alarma_actual,
+        "detalles": {
+            "alta_temperatura": alerta_temp,
+            "alta_presion": alerta_presion,
+            "falla_parada": alerta_falla,
+        },
+    }
+
+
+# --- SCRIPT DE PRUEBA AUTÓNOMO ---
+if __name__ == "__main__":
+    print("=== PRUEBA DE SISTEMA DE ALARMAS SONORAS ===")
+
+    # 1. Condición Normal (Silencio)
+    print("\n[1] Temp: 85°C | Presión: 6.8 bar | Falla: False -> (Normal)")
+    verificar_y_notificar_alarmas(85.0, 6.8, False)
+    time.sleep(2)
+
+    # 2. Transición a Alta Temperatura (DEBE SONAR)
+    print(
+        "\n[2] Temp: 96°C (ALERTA) | Presión: 7.0 bar | Falla: False -> [🔊 SUENA ALARMA]"
+    )
+    verificar_y_notificar_alarmas(96.0, 7.0, False)
+    time.sleep(2)
+
+    # 3. La condición persiste (SILENCIO - evita molestar en cada ciclo)
+    print(
+        "\n[3] Temp: 97°C (ALERTA) | Presión: 7.0 bar | Falla: False -> (En silencio por Cooldown)"
+    )
+    verificar_y_notificar_alarmas(97.0, 7.0, False)
+    time.sleep(2)
+
+    # 4. Recuperación a valores normales
+    print("\n[4] Temp: 88°C | Presión: 6.9 bar | Falla: False -> (Estado Normalizado)")
+    verificar_y_notificar_alarmas(88.0, 6.9, False)
+    time.sleep(2)
+
+    # 5. Transición a Falla de Parada (DEBE SONAR NUEVAMENTE)
+    print("\n[5] Temp: 88°C | Presión: 0.0 bar | Falla: True -> [🔊 SUENA ALARMA]")
+    verificar_y_notificar_alarmas(88.0, 0.0, True)
+
+    print("\n=== PRUEBA FINALIZADA ===")

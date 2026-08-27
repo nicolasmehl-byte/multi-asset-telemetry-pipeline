@@ -235,7 +235,8 @@ if __name__ == "__main__":
     while True:
         try:
             main()
-            time.sleep(20)  # Refresca cada 20 segundos
+            time.sleep(getattr(config, "POLLING_INTERVAL", 60))
         except KeyboardInterrupt:
             print("\nLectura detenida por el usuario.")
             break
+
