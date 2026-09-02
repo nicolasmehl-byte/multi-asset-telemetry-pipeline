@@ -14,18 +14,8 @@ Qué cambia respecto a dashboard.py:
   con doble eje Y, en vez de dos gráficos separados (más fácil de comparar
   patrones entre las dos variables).
 - Sidebar con: badge de estado general del sistema, toggle para silenciar
-  TODAS las alarmas sonoras de una vez, y panel de debug de conexión
-  (igual que en v1).
-
-Qué se mantiene igual a propósito:
-- La conexión real a Supabase (NO se usan datos simulados: el pedido
-  original pedía generate_mock_data(), pero reemplazar la fuente de datos
-  real por datos falsos tiraría abajo todo el pipeline Modbus -> Supabase
-  ya funcionando).
-- Los umbrales de alerta por equipo (PREVENTIVE_ALERTS), porque son valores
-  técnicos reales provistos para cada máquina, no genéricos.
-- El sistema de alarma sonora vía Web Audio API (no necesita ningún archivo
-  de audio de por sí, funciona igual en local y en Streamlit Cloud).
+  TODAS las alarmas sonoras de una vez, y panel de debug de conexión.
+- Descarga de datos de historial a CSV.
 """
 
 import json
@@ -45,7 +35,7 @@ from plotly.subplots import make_subplots
 # 1. CONFIGURACIÓN DE PÁGINA Y CONSTANTES DE PLANTA
 # ==============================================================================
 st.set_page_config(
-    page_title="Beniplast | Monitoreo Industrial", page_icon="B", layout="wide"
+    page_title="Beniplast | Monitoreo Industrial", page_icon="🏭", layout="wide"
 )
 
 MACHINE_DISPLAY_LABEL = {
@@ -60,8 +50,6 @@ MACHINE_ALERT_KEY = {
 }
 ORDEN_PLANTA_KEYS = ["AERCOM_22P", "SULLAIR_COMPRESSOR", "CHILLER_TRANE"]
 
-# Umbrales por defecto (mismos valores reales que en dashboard.py v1).
-# Se pueden ajustar temporalmente desde el sidebar sin tocar el código.
 DEFAULT_PREVENTIVE_ALERTS = {
     "AERCOM 22P": {
         "max_temp": 95.0,
@@ -156,44 +144,44 @@ def load_css():
         .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp p, .stApp span, .stApp label {
             color: #FFFFFF !important;
         }
-        [data-testid="stMetricValue"] { font-size: 2rem !important; font-weight: 700; color: #58A6FF !important; }
-        [data-testid="stMetricLabel"] { color: #94A3B8 !important; font-weight: 600; font-size: 1.0rem !important; }
-        [data-baseweb="tab"] { font-size: 1.15rem !important; font-weight: 700 !important; }
+        [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700; color: #58A6FF !important; }
+        [data-testid="stMetricLabel"] { color: #94A3B8 !important; font-weight: 600; font-size: 0.9rem !important; }
+        [data-baseweb="tab"] { font-size: 1.1rem !important; font-weight: 700 !important; }
 
         /* --- Tarjetas KPI de planta (panel superior) --- */
         .kpi-card {
             background-color: #1f293d;
             border: 1px solid #30363D;
-            border-radius: 14px;
-            padding: 18px 20px;
+            border-radius: 12px;
+            padding: 16px;
             text-align: center;
         }
-        .kpi-card .kpi-label { color: #94A3B8; font-size: 0.85rem; font-weight: 600; text-transform: uppercase; }
-        .kpi-card .kpi-value { font-size: 2.1rem; font-weight: 800; margin-top: 6px; }
-        .kpi-card .kpi-delta { font-size: 0.85rem; margin-top: 4px; }
+        .kpi-card .kpi-label { color: #94A3B8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; }
+        .kpi-card .kpi-value { font-size: 1.8rem; font-weight: 800; margin-top: 4px; }
+        .kpi-card .kpi-delta { font-size: 0.8rem; margin-top: 4px; }
         .kpi-delta-good { color: #4ADE80; }
         .kpi-delta-bad { color: #F87171; }
         .kpi-delta-neutral { color: #94A3B8; }
 
         /* --- Badge de estado general del sistema --- */
         .system-status-badge {
-            display: inline-block; padding: 10px 22px; border-radius: 24px;
-            font-weight: 800; font-size: 1.1rem; letter-spacing: 0.5px;
+            display: inline-block; padding: 8px 18px; border-radius: 20px;
+            font-weight: 800; font-size: 1rem; letter-spacing: 0.5px;
         }
         .status-normal { background-color: #14532D; color: #4ADE80; border: 1px solid #4ADE80; }
         .status-advertencia { background-color: #78350F; color: #FBBF24; border: 1px solid #FBBF24; animation: blink 1.4s step-start infinite; }
         .status-peligro { background-color: #7F1D1D; color: #FCA5A5; border: 1px solid #F87171; animation: blink 0.8s step-start infinite; }
 
-        .status-badge { display: inline-block; padding: 8px 18px; border-radius: 20px; font-weight: 700; font-size: 16px; color: #FFFFFF !important; text-align: center; }
+        .status-badge { display: inline-block; padding: 6px 14px; border-radius: 16px; font-weight: 700; font-size: 14px; color: #FFFFFF !important; text-align: center; }
         .status-on { background-color: #16A34A; border: 1px solid #4ADE80; }
         .status-off, .status-offline { background-color: #DC2626; border: 1px solid #F87171; animation: blink 1.2s step-start infinite; }
 
-        .industrial-alert-pulse { color: #FFFFFF !important; background-color: rgba(248,113,113,0.18) !important; border: 1px solid #F87171 !important; padding: 12px 14px; border-radius: 10px; margin-bottom: 10px; font-weight: 600; }
+        .industrial-alert-pulse { color: #FFFFFF !important; background-color: rgba(248,113,113,0.18) !important; border: 1px solid #F87171 !important; padding: 10px 12px; border-radius: 8px; margin-bottom: 8px; font-weight: 600; }
         .industrial-alert-compact { color: #FFFFFF !important; background-color: rgba(248,113,113,0.12) !important; border-left: 3px solid #F87171 !important; padding: 5px 10px; margin: 3px 0; font-size: 13px; }
-        .maintenance-badge { display: inline-block; color: #FFFFFF !important; background-color: #991B1B !important; border: 1px solid #F87171 !important; border-radius: 14px; padding: 4px 10px; font-size: 12px; font-weight: 700; animation: blink 1.2s step-start infinite; cursor: help; }
-        .industrial-alert-failure { color: #FFFFFF !important; background-color: #991B1B !important; border: 2px solid #F87171 !important; padding: 14px 16px; border-radius: 8px; margin: 5px 0 10px; font-size: 18px; font-weight: 700; }
+        .maintenance-badge { display: inline-block; color: #FFFFFF !important; background-color: #991B1B !important; border: 1px solid #F87171 !important; border-radius: 12px; padding: 4px 8px; font-size: 11px; font-weight: 700; animation: blink 1.2s step-start infinite; }
+        .industrial-alert-failure { color: #FFFFFF !important; background-color: #991B1B !important; border: 2px solid #F87171 !important; padding: 12px 14px; border-radius: 8px; margin: 5px 0 10px; font-size: 16px; font-weight: 700; }
         .substate-label { color: #94A3B8; font-size: 0.75rem; font-weight: 600; margin-top: 10px; }
-        .substate-value { color: #58A6FF; font-size: 1rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
+        .substate-value { color: #58A6FF; font-size: 0.95rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
         @keyframes blink { 50% { opacity: 0.35; } }
         </style>
         """,
@@ -221,7 +209,7 @@ def kpi_card(label, value, delta_text=None, delta_kind="neutral"):
 
 
 # ==============================================================================
-# 4. ALARMA SONORA (play_alarm_sound / stop_alarm_sound)
+# 4. ALARMA SONORA (WEB AUDIO API)
 # ==============================================================================
 if "acknowledged_alarms" not in st.session_state:
     st.session_state["acknowledged_alarms"] = set()
@@ -229,11 +217,7 @@ if "acknowledged_alarms" not in st.session_state:
 
 @st.fragment(run_every=10)
 def play_alarm_sound():
-    """
-    Genera un tono de alarma directo en el navegador con la Web Audio API.
-    No requiere ningún archivo de audio: funciona igual en local y en la nube,
-    y evita tener que subir/mantener un asset de sonido en el repo.
-    """
+    """Genera un tono de alarma directo en el navegador con la Web Audio API."""
     js_code = """
     <script>
     if (!window.alarmInterval) {
@@ -269,7 +253,7 @@ def stop_alarm_sound():
 
 
 # ==============================================================================
-# 5. LECTURA DE DATOS
+# 5. LECTURA DE DATOS DESDE SUPABASE / POSTGRES
 # ==============================================================================
 @st.cache_data(ttl=5)
 def get_latest_data():
@@ -336,11 +320,6 @@ def get_historical_data(machine, start_date, end_date):
 
 @st.cache_data(ttl=60)
 def get_plant_uptime_24h():
-    """
-    KPI de eficiencia de planta: % de lecturas de las últimas 24hs donde algún
-    equipo mostró presión de línea > 1 bar (criterio de "encendido").
-    Es una aproximación simple de disponibilidad global de la planta.
-    """
     query = """
         SELECT
             COUNT(*) FILTER (WHERE pressure_bar > 1) * 100.0 / NULLIF(COUNT(*), 0) AS uptime_pct
@@ -354,23 +333,9 @@ def get_plant_uptime_24h():
 
 
 # ==============================================================================
-# 6. LÓGICA DE ALERTAS CENTRALIZADA (check_alerts)
+# 6. LÓGICA DE ALERTAS CENTRALIZADA
 # ==============================================================================
 def check_alerts(row, thresholds_by_key):
-    """
-    Evalúa una fila de datos de un equipo contra sus umbrales y devuelve:
-      {
-        "online": bool,
-        "level": "NORMAL" | "ADVERTENCIA" | "PELIGRO",
-        "temp_alert": str | None,
-        "press_alert": str | None,
-        "maintenance_alerts": [str, ...],
-        "shutdown": bool,
-      }
-    Centralizar esto acá evita repetir la misma lógica de comparación de
-    umbrales en cada lugar del código que necesita saber "¿está todo bien
-    con este equipo?".
-    """
     timeout_desconexion = int(os.getenv("TIMEOUT_DESCONEXION", "200"))
 
     last_update = pd.to_datetime(row["timestamp"])
@@ -403,18 +368,22 @@ def check_alerts(row, thresholds_by_key):
 
         if temp is not None:
             if thresholds.get("max_temp") is not None and temp > thresholds["max_temp"]:
-                temp_alert = f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
+                temp_alert = (
+                    f"Alta Temp: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
+                )
             elif (
                 thresholds.get("min_temp") is not None and temp < thresholds["min_temp"]
             ):
-                temp_alert = f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
+                temp_alert = (
+                    f"Baja Temp: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
+                )
 
         if press is not None:
             if (
                 thresholds.get("min_press") is not None
                 and press < thresholds["min_press"]
             ):
-                press_alert = f"Presión baja: {press} Bar (Umbral: <{thresholds['min_press']} Bar)"
+                press_alert = f"Baja Presión: {press} Bar (Umbral: <{thresholds['min_press']} Bar)"
             elif (
                 thresholds.get("max_press") is not None
                 and press > thresholds["max_press"]
@@ -446,7 +415,6 @@ def check_alerts(row, thresholds_by_key):
 
 
 def compute_global_status(alerts_by_machine):
-    """Combina los niveles de todos los equipos en un único estado de planta."""
     levels = [a["level"] for a in alerts_by_machine.values()]
     if "PELIGRO" in levels:
         return "PELIGRO"
@@ -459,14 +427,11 @@ def compute_global_status(alerts_by_machine):
 # 7. SIDEBAR (render_sidebar)
 # ==============================================================================
 def render_sidebar(df_latest, alerts_by_machine):
-    """
-    Sidebar con: estado global del sistema, toggle de silenciar alarmas,
-    ajuste opcional de umbrales, y panel de debug de conexión.
-    Devuelve un diccionario con las preferencias elegidas por el usuario.
-    """
     with st.sidebar:
         st.markdown("### 🏭 Estado del Sistema")
-        estado_global = compute_global_status(alerts_by_machine)
+        estado_global = (
+            compute_global_status(alerts_by_machine) if alerts_by_machine else "NORMAL"
+        )
         badge_class = {
             "NORMAL": "status-normal",
             "ADVERTENCIA": "status-advertencia",
@@ -482,25 +447,23 @@ def render_sidebar(df_latest, alerts_by_machine):
         st.markdown("### 🔊 Alarmas Sonoras")
         sonido_activo = st.toggle("Sonido de alarma activado", value=True)
         if not sonido_activo:
-            st.caption(
-                "Las alarmas visuales se siguen mostrando; solo se silencia el sonido."
-            )
+            st.caption("Las alarmas visuales se muestran; solo se silencia el audio.")
         st.markdown("---")
 
         st.markdown("### ⚙️ Umbrales de Alerta")
         thresholds_by_key = {}
-        with st.expander("Ajustar umbrales (avanzado)", expanded=False):
+        with st.expander("Ajustar umbrales", expanded=False):
             for alert_key, defaults in DEFAULT_PREVENTIVE_ALERTS.items():
                 st.markdown(f"**{alert_key}**")
                 max_temp = st.slider(
-                    f"Temp. máx (°C) - {alert_key}",
+                    "Temp. máx (°C)",
                     0.0,
                     150.0,
                     defaults["max_temp"],
                     key=f"maxtemp_{alert_key}",
                 )
                 max_press = st.slider(
-                    f"Presión máx (bar) - {alert_key}",
+                    "Presión máx (bar)",
                     0.0,
                     40.0,
                     defaults["max_press"],
@@ -512,12 +475,11 @@ def render_sidebar(df_latest, alerts_by_machine):
                     "max_press": max_press,
                     "min_press": defaults["min_press"],
                 }
-        # Si el usuario no tocó el expander, usamos los umbrales reales por defecto
         for alert_key, defaults in DEFAULT_PREVENTIVE_ALERTS.items():
             thresholds_by_key.setdefault(alert_key, defaults)
 
         st.markdown("---")
-        with st.expander("🔧 Debug DB (solo admin)", expanded=False):
+        with st.expander("🔧 Debug DB", expanded=False):
             _render_debug_panel()
 
     return {"sonido_activo": sonido_activo, "thresholds_by_key": thresholds_by_key}
@@ -534,12 +496,12 @@ def _mask_host_port_from_url(url: str) -> str:
 
 
 def _render_debug_panel():
-    show_db_debug = st.checkbox("Mostrar info de conexión (segura)", key="debug_db")
+    show_db_debug = st.checkbox("Mostrar info de conexión", key="debug_db")
     if not show_db_debug:
         return
     db_url = get_database_url()
     if not db_url:
-        st.warning("DATABASE_URL no configurada en st.secrets ni en pass.env")
+        st.warning("DATABASE_URL no configurada")
         return
     st.info(
         "Fuente: st.secrets"
@@ -550,13 +512,13 @@ def _render_debug_panel():
     try:
         conn = psycopg2.connect(db_url, connect_timeout=5)
         conn.close()
-        st.success("Conexión a la base: OK")
+        st.success("Conexión BD: OK")
     except Exception as e:
         st.error(f"Conexión fallida: {e.__class__.__name__}: {str(e)[:150]}")
 
 
 # ==============================================================================
-# 8. GAUGES
+# 8. GAUGES / MANÓMETROS (PLOTLY)
 # ==============================================================================
 def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
     fig = go.Figure(
@@ -564,13 +526,13 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
             mode="gauge+number",
             value=value,
             domain={"x": [0.06, 0.94], "y": [0, 0.68]},
-            number={"font": {"size": 34, "color": font_color}, "suffix": f" {unit}"},
+            number={"font": {"size": 30, "color": font_color}, "suffix": f" {unit}"},
             gauge={
                 "axis": {
                     "range": [0, max_val],
                     "tickwidth": 1,
                     "tickcolor": font_color,
-                    "tickfont": {"size": 19, "color": font_color},
+                    "tickfont": {"size": 14, "color": font_color},
                 },
                 "bar": {"color": color},
                 "bgcolor": track_color,
@@ -585,13 +547,13 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
         xref="paper",
         yref="paper",
         showarrow=False,
-        font=dict(size=34, color=font_color),
+        font=dict(size=20, color=font_color),
         xanchor="center",
         yanchor="bottom",
     )
     fig.update_layout(
-        height=300,
-        margin=dict(l=24, r=24, t=52, b=12),
+        height=240,
+        margin=dict(l=20, r=20, t=40, b=10),
         autosize=True,
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
@@ -630,10 +592,9 @@ def draw_pressure_gauge(value):
 
 
 # ==============================================================================
-# 9. KPIs GLOBALES DE PLANTA (render_kpis)
+# 9. KPIs GLOBALES DE PLANTA
 # ==============================================================================
 def render_kpis(df_latest, alerts_by_machine):
-    """Panel de 4 tarjetas KPI con el estado general de la planta (no de un solo equipo)."""
     equipos_online = sum(1 for a in alerts_by_machine.values() if a["online"])
     total_equipos = len(alerts_by_machine)
     alarmas_activas = sum(
@@ -667,10 +628,9 @@ def render_kpis(df_latest, alerts_by_machine):
 
 
 # ==============================================================================
-# 10. GRÁFICO COMBINADO DE HISTORIAL (render_charts)
+# 10. GRÁFICO COMBINADO DE HISTORIAL
 # ==============================================================================
 def render_charts(df_hist, machine_label):
-    """Gráfico único con Temperatura y Presión en el mismo eje de tiempo (doble eje Y)."""
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_trace(
         go.Scatter(
@@ -706,9 +666,9 @@ def render_charts(df_hist, machine_label):
     fig.update_xaxes(
         tickformat="%d/%m/%Y", hoverformat="%d/%m/%Y %H:%M", gridcolor="#21262D"
     )
-    st.plotly_chart(fig, width="stretch", key=f"chart_combo_{machine_label}")
+    st.plotly_chart(fig, use_container_width=True, key=f"chart_combo_{machine_label}")
 
-    # Desglose de fallas/advertencias registradas en el período (gráfico de barras)
+    # Desglose de advertencias registradas
     warnings_flat = []
     for w in df_hist["warnings"].dropna():
         try:
@@ -732,7 +692,9 @@ def render_charts(df_hist, machine_label):
             plot_bgcolor="#161B22",
             margin=dict(l=20, r=20, t=50, b=20),
         )
-        st.plotly_chart(fig_bar, width="stretch", key=f"chart_warnings_{machine_label}")
+        st.plotly_chart(
+            fig_bar, use_container_width=True, key=f"chart_warnings_{machine_label}"
+        )
     else:
         st.caption("Sin advertencias registradas en el período seleccionado.")
 
@@ -796,7 +758,7 @@ def render_live_monitoring(thresholds_by_key, sonido_activo):
                     unsafe_allow_html=True,
                 )
 
-            # --- Alarma sonora con reconocimiento (ACK) por equipo ---
+            # --- Alarma sonora con reconocimiento (ACK) ---
             compresor_id = str(row["machine_key"])
             alarma_critica = alert["level"] == "PELIGRO"
             if (
@@ -828,12 +790,12 @@ def render_live_monitoring(thresholds_by_key, sonido_activo):
                         "🔕 Alarma sonora silenciada por el operador para este activo."
                     )
             elif alarma_critica and alert["shutdown"]:
-                # Sonido apagado globalmente, pero igual mostramos la falla visual
                 st.markdown(
                     f"<div class='industrial-alert-failure'>🚨 FALLA DE PARADA: código {alert['shutdown_code']}</div>",
                     unsafe_allow_html=True,
                 )
 
+            # --- Renderizado de Métricas y Gauges (Completado) ---
             col_press, col_temp, col_hours = st.columns(3, gap="small")
             pressure_sink = (
                 float(row["pressure_sink_bar"])
@@ -849,330 +811,123 @@ def render_live_monitoring(thresholds_by_key, sonido_activo):
             with col_press:
                 st.plotly_chart(
                     draw_pressure_gauge(alert["press"] or 0.0),
-                    width="stretch",
+                    use_container_width=True,
                     config={"responsive": True, "displayModeBar": False},
                     key=f"live_p_{row['machine_key']}",
                 )
                 if alert["press_alert"]:
                     st.error(alert["press_alert"], icon="⚠️")
+
             with col_temp:
                 st.plotly_chart(
                     draw_temperature_gauge(alert["temp"] or 0.0),
-                    width="stretch",
+                    use_container_width=True,
                     config={"responsive": True, "displayModeBar": False},
                     key=f"live_t_{row['machine_key']}",
                 )
                 if alert["temp_alert"]:
                     st.error(alert["temp_alert"], icon="⚠️")
+
             with col_hours:
-                hours = row["run_hours"] if pd.notna(row["run_hours"]) else None
-                c1, c2 = st.columns(2, gap="small")
-                with c1:
+                st.metric(
+                    "Horas de Marcha",
+                    (
+                        f"{row['run_hours']:.1f} hs"
+                        if pd.notna(row["run_hours"])
+                        else "N/D"
+                    ),
+                )
+                if delta_pressure is not None:
                     st.metric(
-                        "⏱️ Horas de Marcha",
-                        f"{int(hours):,} h" if hours is not None else "N/D",
+                        "Δ Presión (Depósito)",
+                        f"{pressure_sink:.2f} bar",
+                        delta=f"{delta_pressure:+.2f} bar",
                     )
-                with c2:
-                    label = "ΔP Filtro Separador"
-                    if delta_pressure is not None and delta_pressure >= 0.8:
-                        label += " ⚠️ Reemplazar"
-                    st.metric(
-                        label,
-                        (
-                            f"{delta_pressure:.1f} bar"
-                            if delta_pressure is not None
-                            else "N/D"
-                        ),
-                    )
-                operating_state = (
-                    translate_substate(row["operating_state"])
-                    if pd.notna(row["operating_state"])
-                    else "N/D"
+
+                substate = translate_substate(row.get("operating_state", "N/D"))
+                st.markdown(
+                    "<div class='substate-label'>ESTADO OPERATIVO</div>",
+                    unsafe_allow_html=True,
                 )
                 st.markdown(
-                    f"<div class='substate-label'>Sub-Estado Modbus</div><div class='substate-value'>{operating_state}</div>",
+                    f"<div class='substate-value'>{substate}</div>",
                     unsafe_allow_html=True,
                 )
 
-            st.markdown(
-                f"<p style='color:#94A3B8; font-size:11px; margin:0; text-align:right;'>Última telemetría: {row['timestamp']}</p>",
-                unsafe_allow_html=True,
-            )
+                last_ts = pd.to_datetime(row["timestamp"]).strftime("%d/%m/%Y %H:%M:%S")
+                st.caption(f"Última lectura: {last_ts}")
 
 
 # ==============================================================================
-# 12. TABLA DE HISTORIAL / ALARMAS
+# 12. APORTES Y ENTRYPOINT (main)
 # ==============================================================================
-def render_alarm_history_table(df_hist, thresholds_by_key, machine_label, machine_key):
-    """
-    Tabla de lecturas con dos vistas seleccionables:
-    - Resumen diario: promedio por día + filas con >20 % de desviación resaltadas en rojo.
-    - Todos los datos: cada lectura individual, con filas fuera de umbral resaltadas.
-    """
-    if df_hist.empty:
-        st.info("Sin datos históricos en el período.")
-        return
-
-    vista_tabla = st.selectbox(
-        "Vista de la tabla",
-        ["Resumen diario", "Mostrar todos los datos"],
-        key="history_table_view",
-    )
-
-    # ── Tabla base (datos crudos) ───────────────────────────────────────────
-    tabla_detalle = pd.DataFrame(
-        {
-            "Fecha completa": df_hist["timestamp"],
-            "Activo": machine_label,
-            "Presión": df_hist["pressure_bar"],
-            "Temperatura": df_hist["temperature_c"],
-        }
-    )
-
-    if vista_tabla == "Resumen diario":
-        # ── Cálculo de promedios diarios y desviaciones ───────────────────
-        datos_diarios = df_hist.copy()
-        datos_diarios["fecha"] = datos_diarios["timestamp"].dt.date
-        datos_diarios["pressure_bar"] = pd.to_numeric(
-            datos_diarios["pressure_bar"], errors="coerce"
-        )
-        datos_diarios["temperature_c"] = pd.to_numeric(
-            datos_diarios["temperature_c"], errors="coerce"
-        )
-
-        promedios = (
-            datos_diarios.groupby("fecha", as_index=False)
-            .agg(
-                Presión=("pressure_bar", "mean"),
-                Temperatura=("temperature_c", "mean"),
-            )
-            .sort_values("fecha")
-        )
-        promedio_por_fecha = promedios.set_index("fecha")
-        datos_diarios["promedio_presion"] = datos_diarios["fecha"].map(
-            promedio_por_fecha["Presión"]
-        )
-        datos_diarios["promedio_temperatura"] = datos_diarios["fecha"].map(
-            promedio_por_fecha["Temperatura"]
-        )
-
-        def porcentaje_desviacion(valor, promedio):
-            if pd.isna(valor) or pd.isna(promedio):
-                return float("nan")
-            if promedio == 0:
-                return 0.0 if valor == 0 else float("inf")
-            return abs(valor - promedio) / abs(promedio) * 100
-
-        datos_diarios["desviacion_presion"] = datos_diarios.apply(
-            lambda fila: porcentaje_desviacion(
-                fila["pressure_bar"], fila["promedio_presion"]
-            ),
-            axis=1,
-        )
-        datos_diarios["desviacion_temperatura"] = datos_diarios.apply(
-            lambda fila: porcentaje_desviacion(
-                fila["temperature_c"], fila["promedio_temperatura"]
-            ),
-            axis=1,
-        )
-
-        filas_resumen = []
-        for _, promedio in promedios.iterrows():
-            fecha = promedio["fecha"]
-            filas_resumen.append(
-                {
-                    "Fecha completa": fecha.strftime("%d/%m/%Y"),
-                    "Activo": machine_label,
-                    "Presión": promedio["Presión"],
-                    "Temperatura": promedio["Temperatura"],
-                    "Detalle": "Promedio diario",
-                    "Es desviación": False,
-                }
-            )
-
-            lecturas_con_desviacion = datos_diarios[
-                (datos_diarios["fecha"] == fecha)
-                & (
-                    (datos_diarios["desviacion_presion"] >= 20)
-                    | (datos_diarios["desviacion_temperatura"] >= 20)
-                )
-            ]
-            for _, lectura in lecturas_con_desviacion.iterrows():
-                desviaciones = []
-                if lectura["desviacion_presion"] >= 20:
-                    desviaciones.append(
-                        f"presión: {lectura['desviacion_presion']:.0f}%"
-                    )
-                if lectura["desviacion_temperatura"] >= 20:
-                    desviaciones.append(
-                        f"temperatura: {lectura['desviacion_temperatura']:.0f}%"
-                    )
-                filas_resumen.append(
-                    {
-                        "Fecha completa": lectura["timestamp"].strftime(
-                            "%d/%m/%Y %H:%M:%S"
-                        ),
-                        "Activo": machine_label,
-                        "Presión": lectura["pressure_bar"],
-                        "Temperatura": lectura["temperature_c"],
-                        "Detalle": "Desviación del " + " y ".join(desviaciones),
-                        "Es desviación": True,
-                    }
-                )
-
-        tabla_historial = pd.DataFrame(filas_resumen)
-        es_desviacion = tabla_historial.pop("Es desviación")
-
-    else:
-        # ── Vista cruda: resalta filas fuera de umbral ────────────────────
-        alert_key = MACHINE_ALERT_KEY.get(machine_key)
-        thresholds = thresholds_by_key.get(alert_key, {})
-
-        def fila_en_alarma(r):
-            t, p = r["temperature_c"], r["pressure_bar"]
-            cond_t = pd.notna(t) and (
-                t > thresholds.get("max_temp", 999)
-                or t < thresholds.get("min_temp", -999)
-            )
-            cond_p = pd.notna(p) and (
-                p > thresholds.get("max_press", 999)
-                or p < thresholds.get("min_press", -999)
-            )
-            return bool(cond_t or cond_p)
-
-        tabla_historial = tabla_detalle.assign(
-            Detalle="Lectura registrada"
-        )
-        es_desviacion = df_hist.apply(fila_en_alarma, axis=1).reset_index(drop=True)
-
-    # ── Renderizado final ─────────────────────────────────────────────────
-    tabla_mostrada = tabla_historial.style.apply(
-        lambda fila: [
-            (
-                "background-color: #7f1d1d; color: #ffffff"
-                if es_desviacion.loc[fila.name]
-                else ""
-            )
-            for _ in fila
-        ],
-        axis=1,
-    )
-    st.dataframe(
-        tabla_mostrada,
-        width="stretch",
-        hide_index=True,
-        column_config={
-            "Presión": st.column_config.NumberColumn("Presión", format="%.1f bar"),
-            "Temperatura": st.column_config.NumberColumn(
-                "Temperatura", format="%.1f °C"
-            ),
-            "Detalle": st.column_config.TextColumn("Detalle"),
-        },
-    )
-
-
-# ==============================================================================
-# 13. INTERFAZ PRINCIPAL
-# ==============================================================================
-def render_header():
-    logo_path = os.path.join(BASE_DIR, "logo_grupo_beniplast.png")
-    col_logo, col_text = st.columns([1, 5], vertical_alignment="center")
-    with col_logo:
-        if os.path.exists(logo_path):
-            st.image(logo_path, width=220)
-    with col_text:
-        st.markdown(
-            """
-            <div style="border-left: 3px solid #2F81F7; padding-left: 18px;">
-                <h1 style="margin: 3px 0 2px; font-size: 2rem;">Sistema de Monitoreo Industrial</h1>
-                <div style="color: #94A3B8; font-size: 1.2rem;">Supervisión operativa y análisis de variables críticas</div>
-                <div style="color: #94A3B8; font-size: 1.2rem;">Departamento de Mantenimiento</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    st.markdown("---")
-
-
 def main():
     load_css()
 
     df_latest = get_latest_data()
-    if df_latest.empty:
-        alerts_by_machine = {}
-    else:
-        # Umbrales por defecto para calcular el badge de estado ANTES de leer el sidebar
+    alerts_by_machine = {}
+    if not df_latest.empty:
         alerts_by_machine = {
             row["machine_key"]: check_alerts(row, DEFAULT_PREVENTIVE_ALERTS)
             for _, row in df_latest.iterrows()
         }
 
-    user_selection = render_sidebar(df_latest, alerts_by_machine)
+    sidebar_config = render_sidebar(df_latest, alerts_by_machine)
 
-    render_header()
-    tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
+    st.title("🏭 Planta Beniplast — Monitoreo Industrial SCADA")
+    st.caption("Sistema de Telemetría e Indicadores en Tiempo Real")
 
-    with tab1:
+    tab_live, tab_history = st.tabs(
+        ["📡 Monitoreo en Vivo", "📊 Historial y Analítica"]
+    )
+
+    with tab_live:
         render_live_monitoring(
-            user_selection["thresholds_by_key"], user_selection["sonido_activo"]
+            sidebar_config["thresholds_by_key"], sidebar_config["sonido_activo"]
         )
 
-    with tab2:
-        df_latest_names = get_latest_data()
-        if df_latest_names.empty:
-            st.info("No hay equipos con datos registrados todavía.")
-            return
+    with tab_history:
+        st.markdown("### 📊 Análisis Histórico de Equipos")
+        col_sel, col_start, col_end = st.columns([2, 1, 1])
 
-        machine_list = df_latest_names["machine_key"].tolist()
-        selected_machine = st.selectbox(
-            "Seleccione el activo a analizar:",
-            machine_list,
-            format_func=lambda x: MACHINE_DISPLAY_LABEL.get(x, x),
-            key="select_history_asset",
-        )
-        machine_label = MACHINE_DISPLAY_LABEL.get(selected_machine, selected_machine)
-
-        default_end = datetime.now().date()
-        default_start = default_end - timedelta(days=6)
-        with st.expander("Configurar período", expanded=False):
-            start_date = st.date_input(
-                "Fecha inicial",
-                value=default_start,
-                format="DD/MM/YYYY",
-                key="history_start_date",
+        with col_sel:
+            selected_machine = st.selectbox(
+                "Seleccionar Equipo",
+                options=ORDEN_PLANTA_KEYS,
+                format_func=lambda x: MACHINE_DISPLAY_LABEL.get(x, x),
+                key="hist_machine_select",
             )
+        with col_start:
+            start_date = st.date_input(
+                "Fecha Inicio",
+                value=datetime.now(DATA_TIMEZONE).date() - timedelta(days=1),
+            )
+        with col_end:
             end_date = st.date_input(
-                "Fecha final",
-                value=default_end,
-                format="DD/MM/YYYY",
-                key="history_end_date",
+                "Fecha Fin", value=datetime.now(DATA_TIMEZONE).date()
             )
 
         if start_date > end_date:
-            st.error("La fecha inicial no puede ser posterior a la fecha final.")
-            st.stop()
-
-        df_hist = get_historical_data(selected_machine, start_date, end_date)
-
-        if df_hist.empty:
-            st.info(
-                f"El activo {machine_label} no registra datos históricos almacenados en ese período."
-            )
+            st.error("La fecha de inicio no puede ser posterior a la fecha de fin.")
         else:
-            st.markdown(
-                f"#### Historial analítico: **{machine_label}** (`{len(df_hist)} registros`)"
-            )
-            st.caption(
-                f"Período mostrado: {df_hist['timestamp'].min():%d/%m/%Y %H:%M} a {df_hist['timestamp'].max():%d/%m/%Y %H:%M}"
-            )
-            render_charts(df_hist, machine_label)
-            st.markdown("#### Registro de lecturas")
-            render_alarm_history_table(
-                df_hist,
-                user_selection["thresholds_by_key"],
-                machine_label,
-                selected_machine,
-            )
+            df_hist = get_historical_data(selected_machine, start_date, end_date)
+            if not df_hist.empty:
+                machine_label = MACHINE_DISPLAY_LABEL.get(
+                    selected_machine, selected_machine
+                )
+                render_charts(df_hist, machine_label)
+
+                csv = df_hist.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="📥 Descargar datos históricos (CSV)",
+                    data=csv,
+                    file_name=f"historial_{selected_machine}_{start_date}_{end_date}.csv",
+                    mime="text/csv",
+                )
+            else:
+                st.info(
+                    "No se encontraron registros en el rango de fechas seleccionado."
+                )
 
 
 if __name__ == "__main__":

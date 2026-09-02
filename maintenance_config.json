@@ -1,0 +1,23 @@
+{
+    "security": {
+        "service_pin": "0213"
+    },
+    "SULLAIR_COMPRESSOR": {
+        "last_service_hours": 48002.0,
+        "service_interval_hours": 3500.0,
+        "last_service_date": "2026-09-01",
+        "notes": "Service estándar: cambio de filtros y aceite"
+    },
+    "AERCOM_22P": {
+        "last_service_hours": 0.0,
+        "service_interval_hours": 3000.0,
+        "last_service_date": "",
+        "notes": "Service estándar Aercom"
+    },
+    "CHILLER_TRANE": {
+        "last_service_hours": 0.0,
+        "service_interval_hours": 4000.0,
+        "last_service_date": "",
+        "notes": "Service de mantenimiento Chiller Trane"
+    }
+}

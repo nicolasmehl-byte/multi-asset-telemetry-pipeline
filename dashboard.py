@@ -11,6 +11,50 @@ import streamlit as st
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
+import maintenance_manager as mm
+
+RECOVERY_MASTER_PIN = "0084"
+
+
+def is_valid_service_pin(pin_value):
+    """Devuelve True si el valor es un PIN numérico de 4 dígitos."""
+    pin_str = str(pin_value or "").strip()
+    return len(pin_str) == 4 and pin_str.isdigit()
+
+
+def verify_service_pin_value(pin_value):
+    """Compatibilidad: usa la función real si existe y, si no, cae a validación local."""
+    if hasattr(mm, "verify_service_pin"):
+        return bool(mm.verify_service_pin(pin_value))
+
+    pin_str = str(pin_value or "").strip()
+    if not is_valid_service_pin(pin_str):
+        return False
+
+    cfg = mm.load_maintenance_config() if hasattr(mm, "load_maintenance_config") else {}
+    expected = str(cfg.get("security", {}).get("service_pin", "1234")).strip()
+    return pin_str == expected
+
+
+def update_service_pin_value(new_pin):
+    """Compatibilidad para cambiar el PIN si la función del módulo no está disponible."""
+    if hasattr(mm, "update_service_pin"):
+        return mm.update_service_pin(new_pin)
+
+    pin_str = str(new_pin or "").strip()
+    if len(pin_str) != 4 or not pin_str.isdigit():
+        return False
+
+    if hasattr(mm, "load_maintenance_config") and hasattr(
+        mm, "save_maintenance_config"
+    ):
+        config = mm.load_maintenance_config()
+        config.setdefault("security", {})
+        config["security"]["service_pin"] = pin_str
+        return mm.save_maintenance_config(config)
+    return False
+
+
 ### UMBRALES DE ALERTA CRÍTICA (Se pueden ajustar según la planta)
 umbral_temp = 95.0  # °C
 umbral_pressure = 10.0  # Bar
@@ -279,6 +323,129 @@ st.markdown(
     @keyframes blink {{
         50% {{ opacity: 0.35; }}
     }}
+    .service-container {{
+        background-color: #161B22;
+        border: 1px solid #30363D;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-top: 12px;
+        margin-bottom: 6px;
+    }}
+    .service-title {{
+        font-size: 0.95rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        margin-bottom: 6px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }}
+    .service-badge {{
+        font-size: 0.78rem;
+        padding: 3px 8px;
+        border-radius: 6px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+    }}
+    .service-progress-bg {{
+        background-color: #21262D;
+        border-radius: 8px;
+        height: 10px;
+        width: 100%;
+        overflow: hidden;
+        margin: 8px 0;
+    }}
+    .service-progress-fill {{
+        height: 100%;
+        border-radius: 8px;
+        transition: width 0.4s ease;
+    }}
+    .service-info-row {{
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.82rem;
+        color: #94A3B8;
+        margin-top: 3px;
+    }}
+    .service-mini-card {{
+        background-color: rgba(15, 23, 42, 0.85);
+        border: 1px solid #30363D;
+        border-radius: 8px;
+        padding: 8px 10px;
+        margin-top: 8px;
+        margin-bottom: 2px;
+        width: min(100%, 300px);
+    }}
+    .service-mini-label {{
+        color: #94A3B8;
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+    }}
+    .service-mini-bar {{
+        height: 8px;
+        width: 100%;
+        background-color: #21262D;
+        border-radius: 999px;
+        overflow: hidden;
+    }}
+    .service-mini-bar-fill {{
+        height: 100%;
+        border-radius: 999px;
+        transition: width 0.35s ease;
+    }}
+    .service-mini-values {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-top: 5px;
+        gap: 8px;
+        color: #E2E8F0;
+        font-size: 0.72rem;
+        font-weight: 700;
+    }}
+    .admin-config-box {{
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid #1F6FEB;
+        border-radius: 12px;
+        padding: 12px 12px 8px;
+        margin: 6px 0 12px;
+        box-shadow: inset 0 0 0 1px rgba(31, 111, 235, 0.18);
+    }}
+    .admin-config-header {{
+        color: #8AB4FF;
+        font-size: 0.68rem;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stTextInput"] > div {{
+        background: rgba(15, 23, 42, 0.8);
+        border-radius: 10px;
+        border: 1px solid #1F6FEB;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stTextInput"] input {{
+        background: transparent;
+        color: #F8FAFC;
+        font-weight: 600;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stNumberInput"] > div {{
+        background: rgba(15, 23, 42, 0.8);
+        border-radius: 10px;
+        border: 1px solid #334155;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stNumberInput"] input {{
+        background: transparent;
+        color: #F8FAFC;
+        font-weight: 600;
+    }}
+    [data-testid="stSidebar"] div[data-testid="stButton"] > button {{
+        border-radius: 10px;
+        font-weight: 700;
+    }}
     </style>
 """,
     unsafe_allow_html=True,
@@ -353,109 +520,140 @@ def _mask_host_port_from_url(url: str) -> str:
 
 
 with st.sidebar:
-    with st.expander("🔧 Debug DB (solo admin)", expanded=False):
-        show_db_debug = st.checkbox("Mostrar info de conexión (segura)", key="debug_db")
-        if show_db_debug:
-            db_url = None
-            try:
-                # Intentamos leer el secret sin lanzar si no existe
-                db_url = (
-                    st.secrets.get("DATABASE_URL") if hasattr(st, "secrets") else None
-                )
-            except Exception:
-                db_url = None
+    st.markdown("### 🛠️ Mantenimiento Preventivo")
+    with st.expander("⚙️ Configuración Service Sullair", expanded=False):
+        st.markdown(
+            """
+            <div class="admin-config-box">
+                <div class="admin-config-header">Acceso Admin</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        admin_pin = st.text_input(
+            "PIN administrador",
+            type="password",
+            max_chars=4,
+            key="sb_admin_pin_sullair",
+            help="PIN requerido para guardar o resetear el service.",
+        )
 
-            if not db_url:
-                db_url = os.getenv("DATABASE_URL")
+        with st.expander("🔐 Recuperar contraseña", expanded=False):
+            recovery_pin = st.text_input(
+                "Clave de recuperación",
+                type="password",
+                max_chars=4,
+                key="sb_recovery_pin_sullair",
+                placeholder="1234",
+                help="Solo esta clave maestra permite cambiar el PIN admin del equipo.",
+            )
+            new_admin_pin = st.text_input(
+                "Nuevo PIN admin",
+                type="password",
+                max_chars=4,
+                key="sb_recovery_new_admin_pin_sullair",
+                placeholder="1234",
+                help="Se usa solo si se ingresa la clave maestra correcta.",
+            )
+            if st.button(
+                "Cambiar PIN admin",
+                key="sb_btn_recovery_change_pin_sullair",
+                use_container_width=True,
+            ):
+                if recovery_pin != RECOVERY_MASTER_PIN:
+                    st.warning("❌ Clave de recuperación incorrecta.")
+                elif not is_valid_service_pin(new_admin_pin):
+                    st.warning("❌ El nuevo PIN admin debe tener 4 dígitos numéricos.")
+                else:
+                    update_service_pin_value(new_admin_pin)
+                    st.success("✅ PIN admin actualizado correctamente.")
+                    st.rerun()
 
-            if not db_url:
-                st.warning("DATABASE_URL no configurada en st.secrets ni en pass.env")
-            else:
-                src = (
-                    "st.secrets"
-                    if (hasattr(st, "secrets") and st.secrets.get("DATABASE_URL"))
-                    else "pass.env / env"
-                )
-                st.info(f"Fuente: {src}")
-                st.write("Host:Port:", _mask_host_port_from_url(db_url))
+        cfg_sullair = mm.get_machine_service_config("SULLAIR_COMPRESSOR")
+        sb_last = st.number_input(
+            "Último service (hs):",
+            min_value=0.0,
+            max_value=200000.0,
+            value=float(cfg_sullair.get("last_service_hours", 48002.0)),
+            step=50.0,
+            key="sb_last_service_sullair",
+        )
+        sb_interval = st.number_input(
+            "Intervalo entre services (hs):",
+            min_value=100.0,
+            max_value=50000.0,
+            value=float(cfg_sullair.get("service_interval_hours", 3500.0)),
+            step=100.0,
+            key="sb_interval_sullair",
+        )
 
-                # Test de conexión (rápido y no muestra la URL completa)
-                try:
-                    conn = psycopg2.connect(db_url, connect_timeout=5)
-                    conn.close()
-                    st.success("Conexión a la base: OK")
-                except Exception as e:
-                    st.error(
-                        f"Conexión fallida: {e.__class__.__name__}: {str(e)[:150]}"
-                    )
+        stored_admin_pin = (
+            mm.get_service_pin() if hasattr(mm, "get_service_pin") else "1234"
+        )
+        initial_setup = str(stored_admin_pin or "").strip() in ("", "1234")
 
-                # Estado detallado por activo (timestamps y segundos desde última telemetría)
-                try:
-                    # Ejecutar una consulta mínima inline para evitar depender de
-                    # funciones que podrían definirse más abajo en este archivo.
-                    # Abrir una conexión nueva para debug (no usar la conexión
-                    # cacheada por `init_connection()` ya que esa instancia
-                    # podría ser compartida por la app y no debe cerrarse aquí).
-                    conn_dbg = None
-                    try:
-                        conn_dbg = psycopg2.connect(db_url, connect_timeout=5)
-                    except Exception as e_conn:
-                        st.error(f"No se pudo abrir conexión debug directa: {e_conn}")
-
-                    if conn_dbg is None:
-                        st.warning(
-                            "No se pudo abrir conexión para obtener estado de activos"
-                        )
+        c_sb1, c_sb2 = st.columns([1, 1])
+        with c_sb1:
+            if st.button(
+                "💾 Guardar",
+                key="sb_btn_save_sullair",
+                use_container_width=True,
+            ):
+                if initial_setup:
+                    if not is_valid_service_pin(admin_pin):
+                        st.warning("❌ El PIN admin debe tener 4 dígitos numéricos.")
                     else:
-                        query_dbg = """
-                        SELECT DISTINCT ON (UPPER(TRIM(machine_name)))
-                            UPPER(TRIM(machine_name)) as machine_name, timestamp, pressure_bar
-                        FROM historical_telemetry
-                        ORDER BY UPPER(TRIM(machine_name)), timestamp DESC;
-                        """
-                        df_dbg = read_postgres_dataframe(query_dbg, conn_dbg)
-                        try:
-                            conn_dbg.close()
-                        except Exception:
-                            pass
-
-                        if df_dbg is None or df_dbg.empty:
-                            st.warning(
-                                "No hay filas recientes en la tabla historical_telemetry"
-                            )
-                        else:
-                            now_utc = pd.Timestamp.now(tz="UTC")
-                            rows = []
-                            for _, r in df_dbg.iterrows():
-                                ts = (
-                                    pd.to_datetime(r["timestamp"])
-                                    if pd.notna(r["timestamp"])
-                                    else None
-                                )
-                                if ts is not None and ts.tzinfo is None:
-                                    ts = ts.tz_localize(DATA_TIMEZONE)
-                                diff_sec = None
-                                if ts is not None:
-                                    diff_sec = (
-                                        now_utc - ts.astimezone("UTC")
-                                    ).total_seconds()
-                                machine_label = MACHINE_DISPLAY_LABEL.get(
-                                    r["machine_name"], r["machine_name"]
-                                )
-                                rows.append(
-                                    {
-                                        "machine": machine_label,
-                                        "timestamp": str(ts),
-                                        "tz": (
-                                            str(ts.tzinfo) if ts is not None else None
-                                        ),
-                                        "pressure_bar": r.get("pressure_bar"),
-                                        "seconds_since": diff_sec,
-                                    }
-                                )
-                            st.table(pd.DataFrame(rows))
-                except Exception as e:
-                    st.error(f"Error al calcular estado por activo: {e}")
+                        update_service_pin_value(admin_pin)
+                        mm.update_machine_service_config(
+                            machine_key="SULLAIR_COMPRESSOR",
+                            last_service_hours=sb_last,
+                            service_interval_hours=sb_interval,
+                        )
+                        st.success(
+                            "✅ PIN inicial configurado y configuración guardada."
+                        )
+                        st.rerun()
+                elif not admin_pin or not verify_service_pin_value(admin_pin):
+                    st.warning(
+                        "❌ PIN admin incorrecto. Debe ingresar 4 dígitos válidos."
+                    )
+                else:
+                    mm.update_machine_service_config(
+                        machine_key="SULLAIR_COMPRESSOR",
+                        last_service_hours=sb_last,
+                        service_interval_hours=sb_interval,
+                    )
+                    st.success("✅ Configuración guardada.")
+                    st.rerun()
+        with c_sb2:
+            if st.button(
+                "🔄 Reset Service",
+                key="sb_btn_reset_sullair",
+                use_container_width=True,
+                help="Resetea tomando las horas ingresadas en 'Último service'",
+            ):
+                if initial_setup:
+                    if not is_valid_service_pin(admin_pin):
+                        st.warning("❌ El PIN admin debe tener 4 dígitos numéricos.")
+                    else:
+                        update_service_pin_value(admin_pin)
+                        mm.reset_service_to_current_hours(
+                            machine_key="SULLAIR_COMPRESSOR",
+                            current_hours=sb_last,
+                        )
+                        st.success("✅ PIN inicial configurado y service reseteado.")
+                        st.rerun()
+                elif not admin_pin or not verify_service_pin_value(admin_pin):
+                    st.warning(
+                        "❌ PIN admin incorrecto. No se puede resetear el service."
+                    )
+                else:
+                    mm.reset_service_to_current_hours(
+                        machine_key="SULLAIR_COMPRESSOR",
+                        current_hours=sb_last,
+                    )
+                    st.success("✅ Service reseteado.")
+                    st.rerun()
 
 
 # ==============================================================================
@@ -556,7 +754,9 @@ def get_historical_data(machine, start_date, end_date):
         df["pressure_bar"] = pd.to_numeric(df["pressure_bar"], errors="coerce")
         df["temperature_c"] = pd.to_numeric(df["temperature_c"], errors="coerce")
         if "pressure_sink_bar" in df.columns:
-            df["pressure_sink_bar"] = pd.to_numeric(df["pressure_sink_bar"], errors="coerce")
+            df["pressure_sink_bar"] = pd.to_numeric(
+                df["pressure_sink_bar"], errors="coerce"
+            )
         df = df.sort_values("timestamp").reset_index(drop=True)
     return df
 
@@ -722,7 +922,7 @@ def render_live_monitoring():
                     if pd.notna(row["pressure_sink_bar"])
                     else None
                 )
-                hours = row["run_hours"] if pd.notna(row["run_hours"]) else None
+                hours = float(row["run_hours"]) if pd.notna(row["run_hours"]) else None
                 operating_state = (
                     translate_substate(row["operating_state"])
                     if pd.notna(row["operating_state"])
@@ -860,6 +1060,33 @@ def render_live_monitoring():
                         )
                 # =========================================================================
 
+                if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
+                    service_metrics = mm.calculate_service_metrics(
+                        current_hours=(
+                            hours if is_online and hours is not None else None
+                        ),
+                        machine_key="SULLAIR_COMPRESSOR",
+                    )
+                    hs_restantes = service_metrics["hours_remaining"]
+                    hs_prox = service_metrics["next_service_hours"]
+                    hs_ult = service_metrics["last_service_hours"]
+                    intervalo = service_metrics["service_interval_hours"]
+                    pct_prog = service_metrics["progress_pct"]
+                    status_col = service_metrics["status_color"]
+                    status_lbl = service_metrics["status_label"]
+                    remanente_pct = max(0.0, 100.0 - pct_prog)
+                    service_progress = min(100.0, max(0.0, pct_prog))
+                else:
+                    hs_restantes = None
+                    hs_prox = None
+                    hs_ult = None
+                    intervalo = None
+                    pct_prog = 0.0
+                    status_col = "#94A3B8"
+                    status_lbl = ""
+                    remanente_pct = 0.0
+                    service_progress = 0.0
+
                 # 📊 CUADRÍCULA DE MEDIDORES Y MÉTRICAS
                 col_press, col_temp, col_hours = st.columns(3, gap="small")
 
@@ -931,6 +1158,29 @@ def render_live_monitoring():
                         f"<div class='substate-value'>{operating_state if is_online else 'N/D'}</div>",
                         unsafe_allow_html=True,
                     )
+
+                    if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
+                        st.markdown(
+                            f"""
+                            <div class="service-mini-card">
+                                <div class="service-mini-label">Hs restantes para proximo service</div>
+                                <div class="service-mini-bar">
+                                    <div class="service-mini-bar-fill" style="width: {service_progress:.1f}%; background-color: {status_col};"></div>
+                                </div>
+                                <div class="service-mini-values">
+                                    <span>{int(hs_restantes):,} hs</span>
+                                    <span>{service_progress:.0f}%</span>
+                                </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+
+                # =========================================================================
+                # 🛠️ CONTADOR DE HORAS PARA SERVICE Y MANTENIMIENTO PREVENTIVO
+                # =========================================================================
+                if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
+                    status_code = service_metrics["status"]
 
                 st.markdown(
                     f"<p style='color:{text_muted}; font-size:11px; margin:0; text-align:right;'>Última telemetría: {row['timestamp']}</p>",
@@ -1282,4 +1532,3 @@ with tab2:
             st.info(
                 f"El activo {selected_machine} no registra datos históricos almacenados en el período seleccionado."
             )
-
