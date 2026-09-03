@@ -9,7 +9,7 @@
         "notes": "Service estándar: cambio de filtros y aceite"
     },
     "AERCOM_22P": {
-        "last_service_hours": 0.0,
+        "last_service_hours": 10631.0,
         "service_interval_hours": 3000.0,
         "last_service_date": "",
         "notes": "Service estándar Aercom"

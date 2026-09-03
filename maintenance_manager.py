@@ -24,7 +24,7 @@ DEFAULT_MAINTENANCE_CONFIG = {
         "notes": "Service estándar: cambio de filtros y aceite",
     },
     "AERCOM_22P": {
-        "last_service_hours": 0.0,
+        "last_service_hours": 10631.0,
         "service_interval_hours": 3000.0,
         "last_service_date": "",
         "notes": "Service estándar Aercom",
@@ -94,7 +94,9 @@ def load_maintenance_config() -> dict:
 
         return data
     except Exception as e:
-        print(f"⚠️ Error al leer {CONFIG_FILE_PATH}: {e}. Usando configuración por defecto.")
+        print(
+            f"⚠️ Error al leer {CONFIG_FILE_PATH}: {e}. Usando configuración por defecto."
+        )
         return DEFAULT_MAINTENANCE_CONFIG.copy()
 
 

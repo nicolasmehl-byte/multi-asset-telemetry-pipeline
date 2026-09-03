@@ -48,8 +48,22 @@ DATA_TIMEZONE = os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires")
 # - Horas de marcha: ((reg_hi * 32768) + reg_lo) / 60.0 [Minutos acumulados a horas]
 
 
-# Configuracion luego de integracion fisica.
+# Configuracion luego de integracion fisica (conectado a terminal M2).
+# 0- Conectar a wifi de HF2211. admin-admin
 # 1- DHCP OFF
 # 2- Configurar modo en AP+STA
-# 3- Configurar IP fija en el rango de la red de planta. 192.168.0.xxx (128/140). Distinto a otro. Chequear disponibilidad con ping "IP"
+# 3- Configurar IP STA fija en el rango de la red de planta. 192.168.0.xxx (128/140). Distinto a otro. Chequear disponibilidad con ping "IP"
 # 4- Configurar SSID y Password del STA para que se conecte a la red de planta.
+
+
+# CONFIGURACION WEB AERCOM
+# --Serial Port settings
+# Baud rate 9600 - 8N1
+# Half duplex
+# CLI Serial string   300
+# Protocol setting: Modbus
+# --Communicaton settings
+# Protocol Tcp Server
+# Local port 502 - Buffe size 1024 - keep alive 60s - timeout 0s
+# 32
+# Security disable - Route UART

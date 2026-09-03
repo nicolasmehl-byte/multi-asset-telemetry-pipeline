@@ -76,21 +76,21 @@ ORDEN_PLANTA = [MACHINE_DISPLAY_LABEL[key] for key in ORDEN_PLANTA_KEYS]
 # COTAS DE ADVERTENCIA PREVENTIVA (ALERTAS PREVIAS A FALLA)
 PREVENTIVE_ALERTS = {
     "AERCOM 22P": {
-        "max_temp": 95.0,  # °C (Alerta de alta temperatura)
-        "min_temp": 65.0,  # °C (Alerta de temperatura baja / condensación)
-        "max_press": 7.5,  # bar (Alerta de alta presión)
+        "max_temp": 90.0,
+        "min_temp": 65.0,
+        "max_press": 8,  # bar (Alerta de alta presión)
         "min_press": 6.5,
     },
     "SULLAIR SE1507NEW": {
-        "max_temp": 95.0,
+        "max_temp": 90.0,
         "min_temp": 65.0,
-        "max_press": 7.5,
+        "max_press": 8,
         "min_press": 6.5,
     },
     "CHILLER TRANE CGAX030": {
         "max_temp": 12.0,  # °C (Agua caliente / bajo rendimiento)
         "min_temp": 4.5,  # °C (Alerta anti-congelamiento)
-        "max_press": 27.0,  # bar (Alta presión de condensación)
+        "max_press": 8,  # bar (Alta presión de condensación)
         "min_press": 6.5,  # bar (Baja presión / falta de gas)
     },
 }
@@ -135,9 +135,23 @@ if "acknowledged_alarms" not in st.session_state:
 def trigger_alarm_sound():
     js_code = """
     <script>
-    if (!window.alarmInterval) {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        window.alarmInterval = setInterval(() => {
+    const appWindow = window.parent;
+    const appDocument = appWindow.document;
+    if (!appDocument.__alarmKeyboardInstalled) {
+        appDocument.addEventListener('keydown', (event) => {
+            if (event.code === 'Space' || event.key === 'Enter') {
+                appWindow.__alarmMuted = true;
+                if (appWindow.__alarmInterval) {
+                    clearInterval(appWindow.__alarmInterval);
+                    appWindow.__alarmInterval = null;
+                }
+            }
+        });
+        appDocument.__alarmKeyboardInstalled = true;
+    }
+    if (!appWindow.__alarmMuted && !appWindow.__alarmInterval) {
+        const audioCtx = new (appWindow.AudioContext || appWindow.webkitAudioContext)();
+        appWindow.__alarmInterval = setInterval(() => {
             if (audioCtx.state === 'suspended') { audioCtx.resume(); }
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
@@ -158,9 +172,9 @@ def trigger_alarm_sound():
 def stop_alarm_sound():
     js_code = """
     <script>
-    if (window.alarmInterval) {
-        clearInterval(window.alarmInterval);
-        window.alarmInterval = null;
+    if (window.parent.__alarmInterval) {
+        clearInterval(window.parent.__alarmInterval);
+        window.parent.__alarmInterval = null;
     }
     </script>
     """
@@ -655,6 +669,49 @@ with st.sidebar:
                     st.success("✅ Service reseteado.")
                     st.rerun()
 
+    with st.expander("⚙️ Configuración Service Aercom", expanded=False):
+        cfg_aercom = mm.get_machine_service_config("AERCOM_22P")
+        aercom_last = st.number_input(
+            "Último service Aercom (hs):",
+            min_value=0.0,
+            max_value=200000.0,
+            value=float(cfg_aercom.get("last_service_hours", 10631.0)),
+            step=50.0,
+            key="sb_last_service_aercom",
+        )
+        aercom_interval = st.number_input(
+            "Intervalo service Aercom (hs):",
+            min_value=100.0,
+            max_value=50000.0,
+            value=float(cfg_aercom.get("service_interval_hours", 3000.0)),
+            step=100.0,
+            key="sb_interval_service_aercom",
+        )
+        aercom_col_save, aercom_col_reset = st.columns([1, 1])
+        with aercom_col_save:
+            if st.button("💾 Guardar Aercom", key="sb_save_service_aercom"):
+                if not admin_pin or not verify_service_pin_value(admin_pin):
+                    st.warning("❌ PIN admin incorrecto.")
+                else:
+                    mm.update_machine_service_config(
+                        machine_key="AERCOM_22P",
+                        last_service_hours=aercom_last,
+                        service_interval_hours=aercom_interval,
+                    )
+                    st.success("✅ Configuración Aercom guardada.")
+                    st.rerun()
+        with aercom_col_reset:
+            if st.button("🔄 Reset Aercom", key="sb_reset_service_aercom"):
+                if not admin_pin or not verify_service_pin_value(admin_pin):
+                    st.warning("❌ PIN admin incorrecto.")
+                else:
+                    mm.reset_service_to_current_hours(
+                        machine_key="AERCOM_22P",
+                        current_hours=aercom_last,
+                    )
+                    st.success("✅ Service Aercom reseteado.")
+                    st.rerun()
+
 
 # ==============================================================================
 # 5. FUNCIONES DE EXTRACCIÓN DE DATOS
@@ -666,7 +723,8 @@ def get_latest_data():
     WITH latest_reading AS (
         SELECT DISTINCT ON (UPPER(TRIM(machine_name)))
             UPPER(TRIM(machine_name)) AS machine_key,
-            timestamp, pressure_bar, temperature_c, run_hours
+            timestamp, pressure_bar, temperature_c, run_hours,
+            separator_filter_dp
         FROM historical_telemetry
         ORDER BY UPPER(TRIM(machine_name)), timestamp DESC
     )
@@ -676,6 +734,7 @@ def get_latest_data():
         latest_reading.pressure_bar,
         latest_reading.temperature_c,
         latest_reading.run_hours,
+        latest_reading.separator_filter_dp,
         (
             SELECT pressure_sink_bar
             FROM historical_telemetry h
@@ -814,14 +873,14 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
 
 def draw_temperature_gauge(value, font_color, track_color):
     fig = draw_gauge(
-        value, "Temperatura", 110, "#16A34A", "°C", font_color, track_color
+        value, "Temperatura", 100, "#16A34A", "°C", font_color, track_color
     )
     fig.update_traces(
         gauge={
             "steps": [
                 {"range": [0, 95], "color": "#166534"},
-                {"range": [95, 103], "color": "#A16207"},
-                {"range": [103, 110], "color": "#991B1B"},
+                {"range": [85, 95], "color": "#A16207"},
+                {"range": [95, 100], "color": "#991B1B"},
             ],
             "bar": {"color": "#F8FAFC"},
         }
@@ -837,8 +896,8 @@ def draw_pressure_gauge(value, font_color, track_color):
         gauge={
             "steps": [
                 {"range": [0, 6.5], "color": "#3F3F46"},
-                {"range": [6.5, 7.5], "color": "#166534"},
-                {"range": [7.5, 15], "color": "#991B1B"},
+                {"range": [6.5, 8], "color": "#166534"},
+                {"range": [8, 10], "color": "#991B1B"},
             ],
             "bar": {"color": "#F8FAFC"},
         }
@@ -849,47 +908,6 @@ def draw_pressure_gauge(value, font_color, track_color):
 # ==============================================================================
 # 7. FRAGMENTO DE MONITOREO EN VIVO
 # ==============================================================================
-# --- FUNCIONES AUXILIARES DE AUDIO (Colócalas fuera o arriba de la función principal) ---
-if "acknowledged_alarms" not in st.session_state:
-    st.session_state["acknowledged_alarms"] = set()
-
-
-@st.fragment(run_every=10)
-def trigger_alarm_sound():
-    js_code = """
-    <script>
-    if (!window.alarmInterval) {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        window.alarmInterval = setInterval(() => {
-            if (audioCtx.state === 'suspended') { audioCtx.resume(); }
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.3);
-        }, 700);
-    }
-    </script>
-    """
-    components.html(js_code, height=0, width=0)
-
-
-def stop_alarm_sound():
-    js_code = """
-    <script>
-    if (window.alarmInterval) {
-        clearInterval(window.alarmInterval);
-        window.alarmInterval = null;
-    }
-    </script>
-    """
-    components.html(js_code, height=0, width=0)
-
-
 def render_live_monitoring():
     df_latest = get_latest_data()
     TIMEOUT_DESCONEXION = int(os.getenv("TIMEOUT_DESCONEXION", "200"))
@@ -917,9 +935,9 @@ def render_live_monitoring():
                     if pd.notna(row["pressure_bar"])
                     else None
                 )
-                pressure_sink = (
-                    float(row["pressure_sink_bar"])
-                    if pd.notna(row["pressure_sink_bar"])
+                separator_filter_dp = (
+                    float(row["separator_filter_dp"])
+                    if pd.notna(row["separator_filter_dp"])
                     else None
                 )
                 hours = float(row["run_hours"]) if pd.notna(row["run_hours"]) else None
@@ -928,6 +946,8 @@ def render_live_monitoring():
                     if pd.notna(row["operating_state"])
                     else "N/D"
                 )
+                state_upper = str(operating_state).upper()
+                is_standby = "STANDBY" in state_upper or "ESPERA" in state_upper
                 shutdown_code = (
                     int(row["shutdown_code"])
                     if pd.notna(row["shutdown_code"])
@@ -983,7 +1003,7 @@ def render_live_monitoring():
                     if temp is not None:
                         if temp > thresholds["max_temp"]:
                             temperature_alert = f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
-                        elif temp < thresholds["min_temp"]:
+                        elif temp < thresholds["min_temp"] and not is_standby:
                             temperature_alert = f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
 
                     if press is not None:
@@ -1046,26 +1066,20 @@ def render_live_monitoring():
 
                     # Caja de interacción para mutear la chicharra presionando Enter
                     if not is_ack:
-                        input_ack = st.text_input(
-                            f"🔕 Presiona ENTER para silenciar alarma del compresor {row['machine_label']}:",
-                            key=f"ack_input_{compresor_id}",
-                            placeholder="Haz clic aquí y presiona Enter...",
-                        )
-                        if input_ack != "":
-                            st.session_state["acknowledged_alarms"].add(compresor_id)
-                            st.rerun()
-                    else:
-                        st.info(
-                            "🔕 Alarma sonora silenciada por el operador para este activo."
+                        components.html(
+                            "<script>document.body.focus();</script>",
+                            height=0,
+                            width=0,
                         )
                 # =========================================================================
 
-                if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
+                machine_key = str(row["machine_key"])
+                if machine_key in ORDEN_PLANTA_KEYS:
                     service_metrics = mm.calculate_service_metrics(
                         current_hours=(
                             hours if is_online and hours is not None else None
                         ),
-                        machine_key="SULLAIR_COMPRESSOR",
+                        machine_key=machine_key,
                     )
                     hs_restantes = service_metrics["hours_remaining"]
                     hs_prox = service_metrics["next_service_hours"]
@@ -1090,11 +1104,7 @@ def render_live_monitoring():
                 # 📊 CUADRÍCULA DE MEDIDORES Y MÉTRICAS
                 col_press, col_temp, col_hours = st.columns(3, gap="small")
 
-                delta_pressure = (
-                    pressure_sink - press
-                    if pressure_sink is not None and press is not None
-                    else None
-                )
+                delta_pressure = separator_filter_dp
 
                 with col_press:
                     if is_online:
@@ -1159,7 +1169,7 @@ def render_live_monitoring():
                         unsafe_allow_html=True,
                     )
 
-                    if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
+                    if machine_key in ORDEN_PLANTA_KEYS:
                         st.markdown(
                             f"""
                             <div class="service-mini-card">

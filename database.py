@@ -36,6 +36,7 @@ def inicializar_base_local():
     }
     for column, definition in (
         ("pressure_sink_bar", "REAL"),
+        ("separator_filter_dp", "REAL"),
         ("operating_state", "TEXT"),
         ("shutdown_code", "INTEGER"),
         ("warnings", "TEXT"),
@@ -48,6 +49,17 @@ def inicializar_base_local():
     conexion.close()
 
 
+def _asegurar_columna_dp(connection):
+    """Agrega la columna nueva sin afectar instalaciones existentes."""
+    cursor = connection.cursor()
+    cursor.execute(
+        "ALTER TABLE historical_telemetry "
+        "ADD COLUMN IF NOT EXISTS separator_filter_dp REAL"
+    )
+    connection.commit()
+    cursor.close()
+
+
 def guardar_en_local(machine_name, data, timestamp):
     """Guarda la lectura en la base SQLite local de la notebook."""
     try:
@@ -57,14 +69,16 @@ def guardar_en_local(machine_name, data, timestamp):
             """
             INSERT INTO telemetria_backup 
             (timestamp, machine_name, pressure_bar, pressure_sink_bar,
-             temperature_c, run_hours, operating_state, shutdown_code, warnings)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             separator_filter_dp, temperature_c, run_hours, operating_state,
+             shutdown_code, warnings)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
             (
                 timestamp,
                 machine_name,
                 data["pressure_bar"],
                 data.get("pressure_sink_bar"),
+                data.get("separator_filter_dp"),
                 data["temperature_c"],
                 data["run_hours"],
                 data.get("operating_state"),
@@ -93,7 +107,7 @@ def _traer_lote_pendiente(cursor_local, batch_size):
     """Trae un lote (no todo de una) de filas pendientes de sincronizar."""
     cursor_local.execute(
         """SELECT id, timestamp, machine_name, pressure_bar, pressure_sink_bar,
-              temperature_c, run_hours, operating_state, shutdown_code,
+              separator_filter_dp, temperature_c, run_hours, operating_state, shutdown_code,
               warnings, current_amps
            FROM telemetria_backup
            LIMIT ?""",
@@ -132,9 +146,9 @@ def sincronizar_datos_pendientes():
 
         query_cloud = """
             INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar,
-                pressure_sink_bar, temperature_c, run_hours, operating_state,
+                pressure_sink_bar, separator_filter_dp, temperature_c, run_hours, operating_state,
                 shutdown_code, warnings, current_amps)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         for fila in filas_pendientes:
@@ -144,6 +158,7 @@ def sincronizar_datos_pendientes():
                 machine_name,
                 pressure,
                 pressure_sink,
+                separator_filter_dp,
                 temperature,
                 run_hours,
                 operating_state,
@@ -159,6 +174,7 @@ def sincronizar_datos_pendientes():
                         machine_name,
                         pressure,
                         pressure_sink,
+                        separator_filter_dp,
                         temperature,
                         run_hours,
                         operating_state,
@@ -236,9 +252,9 @@ def save_reading(machine_name, data, timestamp):
     # 2. Intentamos la inserción normal en la nube
     query = """
         INSERT INTO historical_telemetry (timestamp, machine_name, pressure_bar,
-            pressure_sink_bar, temperature_c, run_hours, operating_state,
+            pressure_sink_bar, separator_filter_dp, temperature_c, run_hours, operating_state,
             shutdown_code, warnings)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
 
     connection = None
@@ -253,6 +269,7 @@ def save_reading(machine_name, data, timestamp):
                 machine_name,
                 data["pressure_bar"],
                 data.get("pressure_sink_bar"),
+                data.get("separator_filter_dp"),
                 data["temperature_c"],
                 data["run_hours"],
                 data.get("operating_state"),
