@@ -1,84 +1,36 @@
 import json
 import os
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
-import psycopg2
 import streamlit as st
 import streamlit.components.v1 as components
-from dotenv import load_dotenv
 
+import database as db
 import maintenance_manager as mm
+from components.gauges import draw_pressure_gauge, draw_temperature_gauge
+from components.sidebar import render_sidebar
+from components.styles import inject_scada_styles
 
-RECOVERY_MASTER_PIN = "0084"
+# 1. Configuración de página e inyección CSS
+st.set_page_config(
+    page_title="Beniplast | Monitoreo Industrial", page_icon="B", layout="wide"
+)
+inject_scada_styles()
 
+# 2. Configuración general
+DATA_TIMEZONE = db.DATA_TIMEZONE
+plotly_theme = "plotly_dark"
+card_bg = "#161B22"
+text_color = "#FFFFFF"
+grid_color = "#21262D"
 
-def is_valid_service_pin(pin_value):
-    """Devuelve True si el valor es un PIN numérico de 4 dígitos."""
-    pin_str = str(pin_value or "").strip()
-    return len(pin_str) == 4 and pin_str.isdigit()
-
-
-def verify_service_pin_value(pin_value):
-    """Compatibilidad: usa la función real si existe y, si no, cae a validación local."""
-    if hasattr(mm, "verify_service_pin"):
-        return bool(mm.verify_service_pin(pin_value))
-
-    pin_str = str(pin_value or "").strip()
-    if not is_valid_service_pin(pin_str):
-        return False
-
-    cfg = mm.load_maintenance_config() if hasattr(mm, "load_maintenance_config") else {}
-    expected = str(cfg.get("security", {}).get("service_pin", "1234")).strip()
-    return pin_str == expected
-
-
-def update_service_pin_value(new_pin):
-    """Compatibilidad para cambiar el PIN si la función del módulo no está disponible."""
-    if hasattr(mm, "update_service_pin"):
-        return mm.update_service_pin(new_pin)
-
-    pin_str = str(new_pin or "").strip()
-    if len(pin_str) != 4 or not pin_str.isdigit():
-        return False
-
-    if hasattr(mm, "load_maintenance_config") and hasattr(
-        mm, "save_maintenance_config"
-    ):
-        config = mm.load_maintenance_config()
-        config.setdefault("security", {})
-        config["security"]["service_pin"] = pin_str
-        return mm.save_maintenance_config(config)
-    return False
-
-
-### UMBRALES DE ALERTA CRÍTICA (Se pueden ajustar según la planta)
-umbral_temp = 95.0  # °C
-umbral_pressure = 10.0  # Bar
-
-# ORDEN VISUAL DE LA PLANTA (Primero compresores, al final Chiller)
-MACHINE_DISPLAY_LABEL = {
-    "AERCOM_22P": "Compresor Aercom",
-    "SULLAIR_COMPRESSOR": "Compresor Sullair ",
-    "CHILLER_TRANE": "Chiller Trane",
-}
-MACHINE_ALERT_KEY = {
-    "AERCOM_22P": "AERCOM 22P",
-    "SULLAIR_COMPRESSOR": "SULLAIR SE1507NEW",
-    "CHILLER_TRANE": "CHILLER TRANE CGAX030",
-}
-ORDEN_PLANTA_KEYS = ["AERCOM_22P", "SULLAIR_COMPRESSOR", "CHILLER_TRANE"]
-ORDEN_PLANTA = [MACHINE_DISPLAY_LABEL[key] for key in ORDEN_PLANTA_KEYS]
-
-# COTAS DE ADVERTENCIA PREVENTIVA (ALERTAS PREVIAS A FALLA)
 PREVENTIVE_ALERTS = {
     "AERCOM 22P": {
         "max_temp": 90.0,
         "min_temp": 65.0,
-        "max_press": 8,  # bar (Alerta de alta presión)
+        "max_press": 8,
         "min_press": 6.5,
     },
     "SULLAIR SE1507NEW": {
@@ -88,10 +40,10 @@ PREVENTIVE_ALERTS = {
         "min_press": 6.5,
     },
     "CHILLER TRANE CGAX030": {
-        "max_temp": 12.0,  # °C (Agua caliente / bajo rendimiento)
-        "min_temp": 4.5,  # °C (Alerta anti-congelamiento)
-        "max_press": 8,  # bar (Alta presión de condensación)
-        "min_press": 6.5,  # bar (Baja presión / falta de gas)
+        "max_temp": 12.0,
+        "min_temp": 4.5,
+        "max_press": 8,
+        "min_press": 6.5,
     },
 }
 
@@ -124,14 +76,10 @@ def get_preventive_alerts(alert_key: str) -> dict:
     }
 
 
-### ---- alarma sonora ---- ###
-
-# --- Inicializar registro de alarmas reconocidas (evita re-sonar si ya se presionó Enter) ---
 if "acknowledged_alarms" not in st.session_state:
     st.session_state["acknowledged_alarms"] = set()
 
 
-# --- Función para reproducir el audio de la sirena ---
 def trigger_alarm_sound():
     js_code = """
     <script>
@@ -181,744 +129,45 @@ def stop_alarm_sound():
     components.html(js_code, height=0, width=0)
 
 
-# ==============================================================================
-# 1. CONFIGURACIÓN DE PÁGINA
-# ==============================================================================
-st.set_page_config(
-    page_title="Beniplast | Monitoreo Industrial", page_icon="B", layout="wide"
-)
-# ==============================================================================
-# MODO OSCURO FIJO
-# ==============================================================================
-tema_seleccionado = "🌙 Oscuro SCADA"
-bg_color = "#0E1117"
-card_bg = "#161B22"
-card_border = "#30363D"
-text_color = "#FFFFFF"
-text_muted = "#94A3B8"
-metric_color = "#58A6FF"
-gauge_track = "#21262D"
-plotly_theme = "plotly_dark"
-grid_color = "#21262D"
+# 3. Renderizar Barra Lateral
+render_sidebar()
 
-# ==============================================================================
-# 2. INYECCIÓN DE ESTILOS CSS
-# ==============================================================================
-st.markdown(
-    f"""
-    <style>
-    /* Fondo principal de la app */
-    .stApp {{
-        background-color: {bg_color} !important;
-    }}
-    
-    /* Fondo y borde de la barra lateral (Sidebar) */
-    [data-testid="stSidebar"] {{
-        background-color: {card_bg} !important;
-        border-right: 1px solid {card_border} !important;
-    }}
-    
-    /* Color de texto unificado para toda la interfaz (incluyendo el Sidebar) */
-    .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp p, .stApp span, .stApp label {{
-        color: {text_color} !important;
-    }}
-    
-    /* Tarjetas de activos en el panel principal */
-    [data-testid="stVerticalBlock"] > div[data-testid="stBlock"] {{
-        background-color: {card_bg} !important;
-        border: 1px solid {card_border} !important;
-        border-radius: 12px;
-        padding: 16px;
-        box-sizing: border-box;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-    }}
-
-    [data-testid="stColumn"] {{
-        min-width: 0 !important;
-        box-sizing: border-box;
-    }}
-    
-    /* Métricas */
-    [data-testid="stMetricValue"] {{
-        font-size: 2rem !important;
-        font-weight: 700;
-        color: {metric_color} !important;
-    }}
-    [data-testid="stMetricLabel"] {{
-        color: {text_muted} !important;
-        font-weight: 600;
-        font-size: 1.05rem !important;
-    }}
-    [data-baseweb="tab"] {{
-        font-size: 1.15rem !important;
-        font-weight: 700 !important;
-    }}
-    .substate-label {{
-        color: {text_muted};
-        font-size: 0.75rem;
-        font-weight: 600;
-        margin-top: 10px;
-    }}
-    .substate-value {{
-        color: {metric_color};
-        font-size: 1rem;
-        font-weight: 700;
-        line-height: 1.2;
-        overflow-wrap: anywhere;
-    }}
-    .industrial-alert-pulse {{
-        color: #FFFFFF !important;
-        background-color: rgba(248, 113, 113, 0.18) !important;
-        border: 1px solid #F87171 !important;
-        padding: 12px 14px;
-        border-radius: 10px;
-        margin-bottom: 10px;
-        font-weight: 600;
-    }}
-    .industrial-alert-pulse strong {{
-        color: #FFFFFF !important;
-    }}
-    .industrial-alert-compact {{
-        color: #FFFFFF !important;
-        background-color: rgba(248, 113, 113, 0.12) !important;
-        border-left: 3px solid #F87171 !important;
-        padding: 5px 10px;
-        margin: 3px 0;
-        font-size: 13px;
-    }}
-    .maintenance-badge {{
-        display: inline-block;
-        color: #FFFFFF !important;
-        background-color: #991B1B !important;
-        border: 1px solid #F87171 !important;
-        border-radius: 14px;
-        padding: 4px 10px;
-        font-size: 12px;
-        font-weight: 700;
-        animation: blink 1.2s step-start infinite;
-        cursor: help;
-    }}
-    .industrial-alert-failure {{
-        color: #FFFFFF !important;
-        background-color: #991B1B !important;
-        border: 2px solid #F87171 !important;
-        padding: 14px 16px;
-        border-radius: 8px;
-        margin: 5px 0 10px;
-        font-size: 18px;
-        font-weight: 700;
-    }}
-    .status-badge {{
-        display: inline-block;
-        padding: 8px 18px;
-        border-radius: 20px;
-        font-weight: 700;
-        font-size: 16px;
-        color: #FFFFFF !important;
-        text-align: center;
-    }}
-    .status-on {{
-        background-color: #16A34A;
-        border: 1px solid #4ADE80;
-    }}
-    .status-off, .status-offline {{
-        background-color: #DC2626;
-        border: 1px solid #F87171;
-        animation: blink 1.2s step-start infinite;
-    }}
-    .equipment-offline {{ opacity: 0.35; }}
-    .js-plotly-plot .plotly .main-svg {{
-        overflow: visible !important;
-    }}
-    div[data-testid="stPlotlyChart"] {{
-        width: 100% !important;
-        min-width: 0 !important;
-    }}
-    @keyframes blink {{
-        50% {{ opacity: 0.35; }}
-    }}
-    .service-container {{
-        background-color: #161B22;
-        border: 1px solid #30363D;
-        border-radius: 10px;
-        padding: 12px 16px;
-        margin-top: 12px;
-        margin-bottom: 6px;
-    }}
-    .service-title {{
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: #F8FAFC;
-        margin-bottom: 6px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }}
-    .service-badge {{
-        font-size: 0.78rem;
-        padding: 3px 8px;
-        border-radius: 6px;
-        font-weight: 700;
-        letter-spacing: 0.3px;
-    }}
-    .service-progress-bg {{
-        background-color: #21262D;
-        border-radius: 8px;
-        height: 10px;
-        width: 100%;
-        overflow: hidden;
-        margin: 8px 0;
-    }}
-    .service-progress-fill {{
-        height: 100%;
-        border-radius: 8px;
-        transition: width 0.4s ease;
-    }}
-    .service-info-row {{
-        display: flex;
-        justify-content: space-between;
-        font-size: 0.82rem;
-        color: #94A3B8;
-        margin-top: 3px;
-    }}
-    .service-mini-card {{
-        background-color: rgba(15, 23, 42, 0.85);
-        border: 1px solid #30363D;
-        border-radius: 8px;
-        padding: 8px 10px;
-        margin-top: 8px;
-        margin-bottom: 2px;
-        width: min(100%, 300px);
-    }}
-    .service-mini-label {{
-        color: #94A3B8;
-        font-size: 0.68rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        margin-bottom: 6px;
-    }}
-    .service-mini-bar {{
-        height: 8px;
-        width: 100%;
-        background-color: #21262D;
-        border-radius: 999px;
-        overflow: hidden;
-    }}
-    .service-mini-bar-fill {{
-        height: 100%;
-        border-radius: 999px;
-        transition: width 0.35s ease;
-    }}
-    .service-mini-values {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-top: 5px;
-        gap: 8px;
-        color: #E2E8F0;
-        font-size: 0.72rem;
-        font-weight: 700;
-    }}
-    .admin-config-box {{
-        background: rgba(15, 23, 42, 0.9);
-        border: 1px solid #1F6FEB;
-        border-radius: 12px;
-        padding: 12px 12px 8px;
-        margin: 6px 0 12px;
-        box-shadow: inset 0 0 0 1px rgba(31, 111, 235, 0.18);
-    }}
-    .admin-config-header {{
-        color: #8AB4FF;
-        font-size: 0.68rem;
-        font-weight: 800;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        margin-bottom: 8px;
-    }}
-    [data-testid="stSidebar"] div[data-testid="stTextInput"] > div {{
-        background: rgba(15, 23, 42, 0.8);
-        border-radius: 10px;
-        border: 1px solid #1F6FEB;
-    }}
-    [data-testid="stSidebar"] div[data-testid="stTextInput"] input {{
-        background: transparent;
-        color: #F8FAFC;
-        font-weight: 600;
-    }}
-    [data-testid="stSidebar"] div[data-testid="stNumberInput"] > div {{
-        background: rgba(15, 23, 42, 0.8);
-        border-radius: 10px;
-        border: 1px solid #334155;
-    }}
-    [data-testid="stSidebar"] div[data-testid="stNumberInput"] input {{
-        background: transparent;
-        color: #F8FAFC;
-        font-weight: 600;
-    }}
-    [data-testid="stSidebar"] div[data-testid="stButton"] > button {{
-        border-radius: 10px;
-        font-weight: 700;
-    }}
-    </style>
-""",
-    unsafe_allow_html=True,
-)
-# ==============================================================================
-# 3. CONTROL DE RUTAS Y ENTORNO
-# ==============================================================================
+# 4. Encabezado principal
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-RUTA_ENV = os.path.join(BASE_DIR, "pass.env")
-load_dotenv(RUTA_ENV)
-DATA_TIMEZONE = ZoneInfo(os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires"))
-
-
-def get_database_url():
-    """
-    Obtiene la cadena de conexión a la base de datos desde Streamlit Cloud o
-    desde el entorno local.
-    """
-    try:
-        db_url = st.secrets.get("DATABASE_URL")
-    except Exception:
-        db_url = None
-
-    if db_url:
-        return db_url
-
-    return os.getenv("DATABASE_URL")
-
-
-@st.cache_resource(ttl=60)
-def init_connection():
-    db_url = get_database_url()
-    if not db_url:
-        st.error(
-            "⚠️ **Error de Credenciales:** Variable `DATABASE_URL` no encontrada "
-            "ni en pass.env ni en Secrets de Streamlit."
-        )
-        st.stop()
-    return psycopg2.connect(db_url)
-
-
-def read_postgres_dataframe(query, conn, params=None):
-    with conn.cursor() as cursor:
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
-        columns = [description[0] for description in cursor.description]
-    return pd.DataFrame.from_records(rows, columns=columns)
-
-
-def _mask_host_port_from_url(url: str) -> str:
-    try:
-        from urllib.parse import urlparse
-
-        p = urlparse(url)
-        host = p.hostname or ""
-        port = p.port or ""
-        if host:
-            return f"{host}:{port}"
-        return "(unknown)"
-    except Exception:
-        return "(invalid)"
-
-
-# ==============================================================================
-# 4. BARRA LATERAL (MANTENIMIENTO PREVENTIVO & ADMIN CONFIG)
-# ==============================================================================
-with st.sidebar:
-    st.markdown("### 🛠️ Mantenimiento Preventivo")
-
-    # --- BLOQUE PRINCIPAL DE ACCESO ADMIN (Fuera de los expanders) ---
+logo_path = os.path.join(BASE_DIR, "assets", "logo_grupo_beniplast.png")
+header_logo, header_text = st.columns([1, 5], vertical_alignment="center")
+with header_logo:
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=220)
+with header_text:
     st.markdown(
         """
-        <div class="admin-config-box">
-            <div class="admin-config-header">Acceso Admin</div>
+        <div style="border-left: 3px solid #2F81F7; padding-left: 18px;">
+            <h1 style="margin: 3px 0 2px; font-size: 2rem; line-height: 0.5;">
+                Sistema de Monitoreo Industrial
+            </h1>
+            <div style="color: #94A3B8; font-size: 1.20rem;">
+                Supervisión operativa y análisis de variables críticas
+            </div>
+            <div style="color: #94A3B8; font-size: 1.20rem;">
+                Departamento de Mantenimiento 
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    admin_pin = st.text_input(
-        "PIN administrador",
-        type="password",
-        max_chars=4,
-        key="sb_admin_pin",
-        help="PIN requerido para guardar o resetear el service.",
-    )
+st.markdown("---")
 
-    with st.expander("🔐 Recuperar contraseña", expanded=False):
-        recovery_pin = st.text_input(
-            "Clave de recuperación",
-            type="password",
-            max_chars=4,
-            key="sb_recovery_pin",
-            placeholder="1234",
-            help="Solo esta clave maestra permite cambiar el PIN admin del equipo.",
-        )
-        new_admin_pin = st.text_input(
-            "Nuevo PIN admin",
-            type="password",
-            max_chars=4,
-            key="sb_recovery_new_admin_pin",
-            placeholder="1234",
-            help="Se usa solo si se ingresa la clave maestra correcta.",
-        )
-        if st.button(
-            "Cambiar PIN admin",
-            key="sb_btn_recovery_change_pin",
-            use_container_width=True,
-        ):
-            if recovery_pin != RECOVERY_MASTER_PIN:
-                st.warning("❌ Clave de recuperación incorrecta.")
-            elif not is_valid_service_pin(new_admin_pin):
-                st.warning("❌ El nuevo PIN admin debe tener 4 dígitos numéricos.")
-            else:
-                update_service_pin_value(new_admin_pin)
-                st.success("✅ PIN admin actualizado correctamente.")
-                st.rerun()
+tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
 
-    stored_admin_pin = (
-        mm.get_service_pin() if hasattr(mm, "get_service_pin") else "1234"
-    )
-    initial_setup = str(stored_admin_pin or "").strip() in ("", "1234")
-
-    # --- SECCIÓN SULLAIR ---
-    with st.expander("⚙️ Configuración Service Sullair", expanded=False):
-        cfg_sullair = mm.get_machine_service_config("SULLAIR_COMPRESSOR")
-        sb_last = st.number_input(
-            "Último service (hs):",
-            min_value=0.0,
-            max_value=200000.0,
-            value=float(cfg_sullair.get("last_service_hours", 48002.0)),
-            step=50.0,
-            key="sb_last_service_sullair",
-        )
-        sb_interval = st.number_input(
-            "Intervalo entre services (hs):",
-            min_value=100.0,
-            max_value=50000.0,
-            value=float(cfg_sullair.get("service_interval_hours", 3500.0)),
-            step=100.0,
-            key="sb_interval_sullair",
-        )
-
-        c_sb1, c_sb2 = st.columns([1, 1])
-        with c_sb1:
-            if st.button(
-                "💾 Guardar",
-                key="sb_btn_save_sullair",
-                use_container_width=True,
-            ):
-                if initial_setup:
-                    if not is_valid_service_pin(admin_pin):
-                        st.warning("❌ El PIN admin debe tener 4 dígitos numéricos.")
-                    else:
-                        update_service_pin_value(admin_pin)
-                        mm.update_machine_service_config(
-                            machine_key="SULLAIR_COMPRESSOR",
-                            last_service_hours=sb_last,
-                            service_interval_hours=sb_interval,
-                        )
-                        st.success(
-                            "✅ PIN inicial configurado y configuración guardada."
-                        )
-                        st.rerun()
-                elif not admin_pin or not verify_service_pin_value(admin_pin):
-                    st.warning(
-                        "❌ PIN admin incorrecto. Debe ingresar 4 dígitos válidos."
-                    )
-                else:
-                    mm.update_machine_service_config(
-                        machine_key="SULLAIR_COMPRESSOR",
-                        last_service_hours=sb_last,
-                        service_interval_hours=sb_interval,
-                    )
-                    st.success("✅ Configuración guardada.")
-                    st.rerun()
-        with c_sb2:
-            if st.button(
-                "🔄 Reset Service",
-                key="sb_btn_reset_sullair",
-                use_container_width=True,
-                help="Resetea tomando las horas ingresadas en 'Último service'",
-            ):
-                if initial_setup:
-                    if not is_valid_service_pin(admin_pin):
-                        st.warning("❌ El PIN admin debe tener 4 dígitos numéricos.")
-                    else:
-                        update_service_pin_value(admin_pin)
-                        mm.reset_service_to_current_hours(
-                            machine_key="SULLAIR_COMPRESSOR",
-                            current_hours=sb_last,
-                        )
-                        st.success("✅ PIN inicial configurado y service reseteado.")
-                        st.rerun()
-                elif not admin_pin or not verify_service_pin_value(admin_pin):
-                    st.warning(
-                        "❌ PIN admin incorrecto. No se puede resetear el service."
-                    )
-                else:
-                    mm.reset_service_to_current_hours(
-                        machine_key="SULLAIR_COMPRESSOR",
-                        current_hours=sb_last,
-                    )
-                    st.success("✅ Service reseteado.")
-                    st.rerun()
-
-    # --- SECCIÓN AERCOM ---
-    with st.expander("⚙️ Configuración Service Aercom", expanded=False):
-        cfg_aercom = mm.get_machine_service_config("AERCOM_22P")
-        aercom_last = st.number_input(
-            "Último service Aercom (hs):",
-            min_value=0.0,
-            max_value=200000.0,
-            value=float(cfg_aercom.get("last_service_hours", 10631.0)),
-            step=50.0,
-            key="sb_last_service_aercom",
-        )
-        aercom_interval = st.number_input(
-            "Intervalo service Aercom (hs):",
-            min_value=100.0,
-            max_value=50000.0,
-            value=float(cfg_aercom.get("service_interval_hours", 3000.0)),
-            step=100.0,
-            key="sb_interval_service_aercom",
-        )
-        aercom_col_save, aercom_col_reset = st.columns([1, 1])
-        with aercom_col_save:
-            if st.button("💾 Guardar Aercom", key="sb_save_service_aercom"):
-                if not admin_pin or not verify_service_pin_value(admin_pin):
-                    st.warning("❌ PIN admin incorrecto.")
-                else:
-                    mm.update_machine_service_config(
-                        machine_key="AERCOM_22P",
-                        last_service_hours=aercom_last,
-                        service_interval_hours=aercom_interval,
-                    )
-                    st.success("✅ Configuración Aercom guardada.")
-                    st.rerun()
-        with aercom_col_reset:
-            if st.button("🔄 Reset Aercom", key="sb_reset_service_aercom"):
-                if not admin_pin or not verify_service_pin_value(admin_pin):
-                    st.warning("❌ PIN admin incorrecto.")
-                else:
-                    mm.reset_service_to_current_hours(
-                        machine_key="AERCOM_22P",
-                        current_hours=aercom_last,
-                    )
-                    st.success("✅ Service Aercom reseteado.")
-                    st.rerun()
-
-
-# ==============================================================================
-# 5. FUNCIONES DE EXTRACCIÓN DE DATOS
-# ==============================================================================
-@st.cache_data(ttl=5)
-def get_latest_data():
-    conn = init_connection()
-    query = """
-    WITH latest_reading AS (
-        SELECT DISTINCT ON (UPPER(TRIM(machine_name)))
-            UPPER(TRIM(machine_name)) AS machine_key,
-            timestamp, pressure_bar, temperature_c, run_hours,
-            separator_filter_dp
-        FROM historical_telemetry
-        ORDER BY UPPER(TRIM(machine_name)), timestamp DESC
-    )
-    SELECT
-        latest_reading.machine_key,
-        latest_reading.timestamp,
-        latest_reading.pressure_bar,
-        latest_reading.temperature_c,
-        latest_reading.run_hours,
-        latest_reading.separator_filter_dp,
-        (
-            SELECT pressure_sink_bar
-            FROM historical_telemetry h
-            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
-              AND h.pressure_sink_bar IS NOT NULL
-            ORDER BY h.timestamp DESC
-            LIMIT 1
-        ) AS pressure_sink_bar,
-        (
-            SELECT operating_state
-            FROM historical_telemetry h
-            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
-              AND h.operating_state IS NOT NULL
-            ORDER BY h.timestamp DESC
-            LIMIT 1
-        ) AS operating_state,
-        (
-            SELECT shutdown_code
-            FROM historical_telemetry h
-            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
-              AND h.shutdown_code IS NOT NULL
-            ORDER BY h.timestamp DESC
-            LIMIT 1
-        ) AS shutdown_code,
-        (
-            SELECT warnings
-            FROM historical_telemetry h
-            WHERE UPPER(TRIM(h.machine_name)) = latest_reading.machine_key
-              AND h.warnings IS NOT NULL
-            ORDER BY h.timestamp DESC
-            LIMIT 1
-        ) AS warnings
-    FROM latest_reading;
-    """
-    df = read_postgres_dataframe(query, conn)
-
-    if not df.empty:
-        if df["timestamp"].dt.tz is None:
-            df["timestamp"] = df["timestamp"].dt.tz_localize(DATA_TIMEZONE)
-        df["machine_key"] = pd.Categorical(
-            df["machine_key"], categories=ORDEN_PLANTA_KEYS, ordered=True
-        )
-        df = df.sort_values("machine_key").reset_index(drop=True)
-        df["machine_key"] = df["machine_key"].astype(str)
-        df["machine_label"] = (
-            df["machine_key"].map(MACHINE_DISPLAY_LABEL).fillna(df["machine_key"])
-        )
-        df["machine_alert_key"] = (
-            df["machine_key"].map(MACHINE_ALERT_KEY).fillna(df["machine_key"])
-        )
-
-    return df
-
-
-@st.cache_data(ttl=60)
-def get_historical_data(machine, start_date, end_date):
-    conn = init_connection()
-    query = """
-        SELECT timestamp, pressure_bar, pressure_sink_bar, temperature_c,
-            operating_state, warnings
-    FROM historical_telemetry
-    WHERE UPPER(TRIM(machine_name)) = UPPER(TRIM(%s))
-      AND timestamp >= %s
-      AND timestamp < %s
-    ORDER BY timestamp ASC;
-    """
-    start_datetime = datetime.combine(start_date, datetime.min.time())
-    end_datetime = datetime.combine(end_date + timedelta(days=1), datetime.min.time())
-    df = read_postgres_dataframe(
-        query, conn, params=(machine, start_datetime, end_datetime)
-    )
-    if not df.empty:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        if df["timestamp"].dt.tz is None:
-            df["timestamp"] = df["timestamp"].dt.tz_localize(DATA_TIMEZONE)
-        df["pressure_bar"] = pd.to_numeric(df["pressure_bar"], errors="coerce")
-        df["temperature_c"] = pd.to_numeric(df["temperature_c"], errors="coerce")
-        if "pressure_sink_bar" in df.columns:
-            df["pressure_sink_bar"] = pd.to_numeric(
-                df["pressure_sink_bar"], errors="coerce"
-            )
-        df = df.sort_values("timestamp").reset_index(drop=True)
-    return df
-
-
-# ==============================================================================
-# 6. COMPONENTES VISUALES (Manómetros Estilizados)
-# ==============================================================================
-def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
-    fig = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=value,
-            domain={"x": [0.06, 0.94], "y": [0, 0.68]},
-            number={
-                "font": {"size": 34, "color": font_color},
-                "suffix": f" {unit}",
-            },
-            gauge={
-                "axis": {
-                    "range": [0, max_val],
-                    "tickwidth": 1,
-                    "tickcolor": font_color,
-                    "tickfont": {"size": 19, "color": font_color},
-                },
-                "bar": {"color": color},
-                "bgcolor": track_color,
-                "borderwidth": 0,
-            },
-        )
-    )
-
-    fig.add_annotation(
-        text=f"<b>{title}</b>",
-        x=0.5,
-        y=0.96,
-        xref="paper",
-        yref="paper",
-        showarrow=False,
-        font=dict(size=34, color=font_color),
-        xanchor="center",
-        yanchor="bottom",
-    )
-
-    fig.update_layout(
-        height=300,
-        margin=dict(l=24, r=24, t=52, b=12),
-        autosize=True,
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    return fig
-
-
-def draw_temperature_gauge(value, font_color, track_color):
-    fig = draw_gauge(
-        value, "Temperatura", 100, "#16A34A", "°C", font_color, track_color
-    )
-    fig.update_traces(
-        gauge={
-            "steps": [
-                {"range": [0, 95], "color": "#166534"},
-                {"range": [85, 95], "color": "#A16207"},
-                {"range": [95, 100], "color": "#991B1B"},
-            ],
-            "bar": {"color": "#F8FAFC"},
-        }
-    )
-    return fig
-
-
-def draw_pressure_gauge(value, font_color, track_color):
-    fig = draw_gauge(
-        value, "Presión Línea", 15, "#00E676", "Bar", font_color, track_color
-    )
-    fig.update_traces(
-        gauge={
-            "axis": {
-                "range": [0, 15],
-                "tickvals": [0, 6.5, 8, 15],
-                "ticktext": ["0", "6.5", "8", "15"],
-                "tickwidth": 1,
-                "tickcolor": font_color,
-                "tickfont": {"size": 19, "color": font_color},
-            },
-            "steps": [
-                {"range": [0, 6.5], "color": "#3F3F46"},
-                {"range": [6.5, 8], "color": "#166534"},
-                {"range": [8, 15], "color": "#991B1B"},
-            ],
-            "bar": {"color": "#F8FAFC"},
-        }
-    )
-    return fig
-
-
-# ==============================================================================
-# 7. FRAGMENTO DE MONITOREO EN VIVO
-# ==============================================================================
-def render_live_monitoring():
-    df_latest = get_latest_data()
+# --- TAB 1: MONITOREO EN VIVO ---
+with tab1:
+    df_latest = db.get_latest_data()
     TIMEOUT_DESCONEXION = int(os.getenv("TIMEOUT_DESCONEXION", "200"))
 
     if not df_latest.empty:
         for index, row in df_latest.iterrows():
             with st.container(border=True):
-                # 🕒 Tiempo transcurrido
                 last_update = pd.to_datetime(row["timestamp"])
                 if last_update.tzinfo is None:
                     last_update = last_update.tz_localize(DATA_TIMEZONE)
@@ -927,7 +176,6 @@ def render_live_monitoring():
                     now - last_update.astimezone("UTC")
                 ).total_seconds()
 
-                # 🧹 Sanitización defensiva
                 temp = (
                     float(row["temperature_c"])
                     if pd.notna(row["temperature_c"])
@@ -975,7 +223,6 @@ def render_live_monitoring():
                     except (TypeError, json.JSONDecodeError):
                         warnings = [str(row["warnings"])]
 
-                # 🔌 Estado operativo
                 if segundos_sin_datos > TIMEOUT_DESCONEXION:
                     status = "SIN CONEXIÓN"
                     status_class = "status-offline"
@@ -990,7 +237,6 @@ def render_live_monitoring():
                     f"<span class='status-badge {status_class}'>{status}</span>"
                 )
 
-                # 🗂️ ENCABEZADO DE ACTIVO
                 col_header_title, col_header_status = st.columns([3, 1])
                 with col_header_title:
                     st.markdown(f"### ⚙️ {row['machine_label']}")
@@ -1000,7 +246,6 @@ def render_live_monitoring():
                         unsafe_allow_html=True,
                     )
 
-                # 🚨 CÁLCULO DE UMBRALES Y ALERTAS PREVENTIVAS
                 temperature_alert = None
                 pressure_alert = None
                 maintenance_alerts = []
@@ -1011,7 +256,7 @@ def render_live_monitoring():
                         unsafe_allow_html=True,
                     )
                 else:
-                    alert_key = MACHINE_ALERT_KEY[str(row["machine_key"])]
+                    alert_key = db.MACHINE_ALERT_KEY[str(row["machine_key"])]
                     thresholds = get_preventive_alerts(alert_key)
 
                     if temp is not None:
@@ -1043,15 +288,10 @@ def render_live_monitoring():
                             unsafe_allow_html=True,
                         )
 
-                # =========================================================================
-                # 🔊 LÓGICA DE ALARMA SONORA Y SILENCIAMIENTO POR COMPRESOR
-                # =========================================================================
                 compresor_id = str(row["machine_key"])
-
                 condicion_temp = temperature_alert is not None
                 condicion_presion = pressure_alert is not None
                 condicion_falla = shutdown_code not in (None, 0)
-
                 alarma_critica = condicion_temp or condicion_presion or condicion_falla
 
                 if (
@@ -1062,7 +302,6 @@ def render_live_monitoring():
 
                 if alarma_critica:
                     is_ack = compresor_id in st.session_state["acknowledged_alarms"]
-
                     if not is_ack:
                         trigger_alarm_sound()
                     else:
@@ -1076,14 +315,11 @@ def render_live_monitoring():
 
                     if not is_ack:
                         components.html(
-                            "<script>document.body.focus();</script>",
-                            height=0,
-                            width=0,
+                            "<script>document.body.focus();</script>", height=0, width=0
                         )
-                # =========================================================================
 
                 machine_key = str(row["machine_key"])
-                if machine_key in ORDEN_PLANTA_KEYS:
+                if machine_key in db.ORDEN_PLANTA_KEYS:
                     service_metrics = mm.calculate_service_metrics(
                         current_hours=(
                             hours if is_online and hours is not None else None
@@ -1091,38 +327,20 @@ def render_live_monitoring():
                         machine_key=machine_key,
                     )
                     hs_restantes = service_metrics["hours_remaining"]
-                    hs_prox = service_metrics["next_service_hours"]
-                    hs_ult = service_metrics["last_service_hours"]
-                    intervalo = service_metrics["service_interval_hours"]
                     pct_prog = service_metrics["progress_pct"]
                     status_col = service_metrics["status_color"]
-                    status_lbl = service_metrics["status_label"]
-                    remanente_pct = max(0.0, 100.0 - pct_prog)
                     service_progress = min(100.0, max(0.0, pct_prog))
                 else:
                     hs_restantes = None
-                    hs_prox = None
-                    hs_ult = None
-                    intervalo = None
-                    pct_prog = 0.0
-                    status_col = "#94A3B8"
-                    status_lbl = ""
-                    remanente_pct = 0.0
                     service_progress = 0.0
 
-                # 📊 CUADRÍCULA DE MEDIDORES Y MÉTRICAS
                 col_press, col_temp, col_hours = st.columns(3, gap="small")
-
                 delta_pressure = separator_filter_dp
 
                 with col_press:
                     if is_online:
                         st.plotly_chart(
-                            draw_pressure_gauge(
-                                press if press is not None else 0.0,
-                                text_color,
-                                gauge_track,
-                            ),
+                            draw_pressure_gauge(press if press is not None else 0.0),
                             width="stretch",
                             config={"responsive": True, "displayModeBar": False},
                             key=f"live_p_{row['machine_key']}",
@@ -1135,11 +353,7 @@ def render_live_monitoring():
                 with col_temp:
                     if is_online:
                         st.plotly_chart(
-                            draw_temperature_gauge(
-                                temp if temp is not None else 0.0,
-                                text_color,
-                                gauge_track,
-                            ),
+                            draw_temperature_gauge(temp if temp is not None else 0.0),
                             width="stretch",
                             config={"responsive": True, "displayModeBar": False},
                             key=f"live_t_{row['machine_key']}",
@@ -1178,7 +392,7 @@ def render_live_monitoring():
                         unsafe_allow_html=True,
                     )
 
-                    if machine_key in ORDEN_PLANTA_KEYS:
+                    if machine_key in db.ORDEN_PLANTA_KEYS:
                         st.markdown(
                             f"""
                             <div class="service-mini-card">
@@ -1195,54 +409,16 @@ def render_live_monitoring():
                             unsafe_allow_html=True,
                         )
 
-                if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
-                    status_code = service_metrics["status"]
-
                 st.markdown(
-                    f"<p style='color:{text_muted}; font-size:11px; margin:0; text-align:right;'>Última telemetría: {row['timestamp']}</p>",
+                    f"<p style='color:#94A3B8; font-size:11px; margin:0; text-align:right;'>Última telemetría: {row['timestamp']}</p>",
                     unsafe_allow_html=True,
                 )
     else:
         st.warning("No se encontraron activos transmitiendo en vivo.")
 
-
-# ==============================================================================
-# 8. INTERFAZ DE USUARIO PRINCIPAL
-# ==============================================================================
-logo_path = os.path.join(BASE_DIR, "logo_grupo_beniplast.png")
-header_logo, header_text = st.columns([1, 5], vertical_alignment="center")
-with header_logo:
-    if os.path.exists(logo_path):
-        st.image(logo_path, width=220)
-with header_text:
-    st.markdown(
-        """
-        <div style="border-left: 3px solid #2F81F7; padding-left: 18px;">
-            <h1 style="margin: 3px 0 2px; font-size: 2rem; line-height: 0.5;">
-                Sistema de Monitoreo Industrial
-            </h1>
-            <div style="color: #94A3B8; font-size: 1.20rem;">
-                Supervisión operativa y análisis de variables críticas
-            </div>
-            </h1 style="margin: 5px 0 4px; font-size: 2rem; line-height: 1.2;">
-            <div style="color: #94A3B8; font-size: 1.20rem;">
-                Departamento de Mantenimiento 
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-st.markdown("---")
-
-tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
-
-# --- TAB 1: MONITOREO EN VIVO ---
-with tab1:
-    render_live_monitoring()
-
 # --- TAB 2: HISTORIAL DE TENDENCIAS ---
 with tab2:
-    df_latest_names = get_latest_data()
+    df_latest_names = db.get_latest_data()
 
     if not df_latest_names.empty:
         col_select_asset, col_select_period = st.columns([1, 1])
@@ -1251,7 +427,7 @@ with tab2:
             selected_machine = st.selectbox(
                 "Seleccione el activo a analizar:",
                 machine_list,
-                format_func=lambda x: MACHINE_DISPLAY_LABEL.get(x, x),
+                format_func=lambda x: db.MACHINE_DISPLAY_LABEL.get(x, x),
                 key="select_history_asset",
             )
         with col_select_period:
@@ -1281,7 +457,7 @@ with tab2:
         elif periodo_opcion == "📆 Últimos 7 días":
             start_date = today - timedelta(days=6)
             end_date = today
-        else:  # Personalizado
+        else:
             col_d1, col_d2 = st.columns(2)
             with col_d1:
                 start_date = st.date_input(
@@ -1302,21 +478,19 @@ with tab2:
             st.error("La fecha inicial no puede ser posterior a la fecha final.")
             st.stop()
 
-        df_hist = get_historical_data(selected_machine, start_date, end_date)
+        df_hist = db.get_historical_data(selected_machine, start_date, end_date)
 
         if not df_hist.empty:
-            nombre_activo = MACHINE_DISPLAY_LABEL.get(
+            nombre_activo = db.MACHINE_DISPLAY_LABEL.get(
                 selected_machine, selected_machine
             )
             st.markdown(
                 f"#### Historial analítico: **{nombre_activo}** (`{len(df_hist):,} registros cargados`)"
             )
             st.caption(
-                f"Período mostrado: {df_hist['timestamp'].min():%d/%m/%Y %H:%M} "
-                f"a {df_hist['timestamp'].max():%d/%m/%Y %H:%M}"
+                f"Período mostrado: {df_hist['timestamp'].min():%d/%m/%Y %H:%M} a {df_hist['timestamp'].max():%d/%m/%Y %H:%M}"
             )
 
-            # --- GRÁFICO 1: TEMPERATURA ---
             fig_temp = px.line(
                 df_hist,
                 x="timestamp",
@@ -1344,12 +518,9 @@ with tab2:
                 ),
             )
             st.plotly_chart(
-                fig_temp,
-                width="stretch",
-                key=f"chart_h_temp_{selected_machine}",
+                fig_temp, width="stretch", key=f"chart_h_temp_{selected_machine}"
             )
 
-            # --- GRÁFICO 2: PRESIÓN ---
             fig_pres = px.line(
                 df_hist,
                 x="timestamp",
@@ -1375,9 +546,7 @@ with tab2:
                 yaxis=dict(showgrid=True, gridcolor=grid_color, title="Presión (Bar)"),
             )
             st.plotly_chart(
-                fig_pres,
-                width="stretch",
-                key=f"chart_h_pres_{selected_machine}",
+                fig_pres, width="stretch", key=f"chart_h_pres_{selected_machine}"
             )
 
             col_view_opt, col_limit_opt = st.columns([1, 1])
@@ -1541,7 +710,6 @@ with tab2:
                         "Detalle": st.column_config.TextColumn("Detalle"),
                     },
                 )
-
         else:
             st.info(
                 f"El activo {selected_machine} no registra datos históricos almacenados en el período seleccionado."
