@@ -131,7 +131,8 @@ AERCOM_ALARMS = {
 }
 
 
-def leer_registro(reg_addr):
+def leer_registro(reg_addr, retries=2):
+    """Lee un registro del Sullair con sistema de reintentos para evitar cortes por red."""
     req = bytes(
         [
             0x00,
@@ -149,18 +150,20 @@ def leer_registro(reg_addr):
         ]
     )
 
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(1.5)
-    try:
-        s.connect((GATEWAY_IP, PORT))
-        s.sendall(req)
-        resp = s.recv(256)
-        if len(resp) >= 9 and resp[7] == 0x04:
-            return int.from_bytes(resp[9:11], byteorder="big")
-    except Exception:
-        pass
-    finally:
-        s.close()
+    for intento in range(retries + 1):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(2.0)  # Un poquito más de margen de tiempo (2 segundos)
+        try:
+            s.connect((GATEWAY_IP, PORT))
+            s.sendall(req)
+            resp = s.recv(256)
+            if len(resp) >= 9 and resp[7] == 0x04:
+                return int.from_bytes(resp[9:11], byteorder="big")
+        except Exception:
+            if intento < retries:
+                time.sleep(0.3)  # Espera antes de reintentar
+        finally:
+            s.close()
     return None
 
 
@@ -374,6 +377,7 @@ def main():
     p_sumidero_bar = ajustar_presion(
         (p_sumidero_raw / 232.0) if p_sumidero_raw else 0.0
     )
+    separator_filter_dp = max(0.0, p_sumidero_bar - p_linea_bar)
     horas_marcha = int(
         (((run_hi * 32768) + run_lo) / 60.0)
         if (run_hi is not None and run_lo is not None)
@@ -389,6 +393,7 @@ def main():
     datos_telemetria = {
         "pressure_bar": p_linea_bar,
         "pressure_sink_bar": p_sumidero_bar,
+        "separator_filter_dp": separator_filter_dp,
         "temperature_c": temp_c,
         "run_hours": horas_marcha,
         "operating_state": estado_str,
@@ -415,6 +420,7 @@ def main():
     print(f"Temperatura T1    : {temp_c:.1f} °C")
     print(f"Presión Línea P2  : {p_linea_bar:.1f} bar")
     print(f"Presión Sumid. P1 : {p_sumidero_bar:.1f} bar")
+    print(f"Delta P Separador : {separator_filter_dp:.1f} bar")
     print(f"Horas de Marcha   : {horas_marcha:,} hs")
 
     print("\n" + "=" * 65)

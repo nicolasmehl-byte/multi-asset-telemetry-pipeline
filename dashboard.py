@@ -182,7 +182,7 @@ def stop_alarm_sound():
 
 
 # ==============================================================================
-# 1. CONFIGURACIÓN DE PÁGINA (¡Restaurada!)
+# 1. CONFIGURACIÓN DE PÁGINA
 # ==============================================================================
 st.set_page_config(
     page_title="Beniplast | Monitoreo Industrial", page_icon="B", layout="wide"
@@ -469,8 +469,6 @@ st.markdown(
 # ==============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 RUTA_ENV = os.path.join(BASE_DIR, "pass.env")
-# Si pass.env no existe (por ejemplo, en Streamlit Cloud, donde nunca se sube
-# por seguridad), load_dotenv simplemente no hace nada y no tira error.
 load_dotenv(RUTA_ENV)
 DATA_TIMEZONE = ZoneInfo(os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires"))
 
@@ -479,12 +477,8 @@ def get_database_url():
     """
     Obtiene la cadena de conexión a la base de datos desde Streamlit Cloud o
     desde el entorno local.
-
-    - En Streamlit Cloud: usa st.secrets["DATABASE_URL"] cuando se configuró.
-    - En local: usa la variable de entorno cargada desde pass.env.
     """
     try:
-        # Acceder a st.secrets puede fallar cuando no existe ningún secrets.toml.
         db_url = st.secrets.get("DATABASE_URL")
     except Exception:
         db_url = None
@@ -515,10 +509,6 @@ def read_postgres_dataframe(query, conn, params=None):
     return pd.DataFrame.from_records(rows, columns=columns)
 
 
-# ---------------------------------------------------------------------------
-# Debug: panel seguro (no muestra credenciales) para verificar origen DB
-# Se muestra solo si el usuario marca la casilla en el sidebar.
-# ---------------------------------------------------------------------------
 def _mask_host_port_from_url(url: str) -> str:
     try:
         from urllib.parse import urlparse
@@ -533,56 +523,67 @@ def _mask_host_port_from_url(url: str) -> str:
         return "(invalid)"
 
 
+# ==============================================================================
+# 4. BARRA LATERAL (MANTENIMIENTO PREVENTIVO & ADMIN CONFIG)
+# ==============================================================================
 with st.sidebar:
     st.markdown("### 🛠️ Mantenimiento Preventivo")
-    with st.expander("⚙️ Configuración Service Sullair", expanded=False):
-        st.markdown(
-            """
-            <div class="admin-config-box">
-                <div class="admin-config-header">Acceso Admin</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        admin_pin = st.text_input(
-            "PIN administrador",
+
+    # --- BLOQUE PRINCIPAL DE ACCESO ADMIN (Fuera de los expanders) ---
+    st.markdown(
+        """
+        <div class="admin-config-box">
+            <div class="admin-config-header">Acceso Admin</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    admin_pin = st.text_input(
+        "PIN administrador",
+        type="password",
+        max_chars=4,
+        key="sb_admin_pin",
+        help="PIN requerido para guardar o resetear el service.",
+    )
+
+    with st.expander("🔐 Recuperar contraseña", expanded=False):
+        recovery_pin = st.text_input(
+            "Clave de recuperación",
             type="password",
             max_chars=4,
-            key="sb_admin_pin_sullair",
-            help="PIN requerido para guardar o resetear el service.",
+            key="sb_recovery_pin",
+            placeholder="1234",
+            help="Solo esta clave maestra permite cambiar el PIN admin del equipo.",
         )
+        new_admin_pin = st.text_input(
+            "Nuevo PIN admin",
+            type="password",
+            max_chars=4,
+            key="sb_recovery_new_admin_pin",
+            placeholder="1234",
+            help="Se usa solo si se ingresa la clave maestra correcta.",
+        )
+        if st.button(
+            "Cambiar PIN admin",
+            key="sb_btn_recovery_change_pin",
+            use_container_width=True,
+        ):
+            if recovery_pin != RECOVERY_MASTER_PIN:
+                st.warning("❌ Clave de recuperación incorrecta.")
+            elif not is_valid_service_pin(new_admin_pin):
+                st.warning("❌ El nuevo PIN admin debe tener 4 dígitos numéricos.")
+            else:
+                update_service_pin_value(new_admin_pin)
+                st.success("✅ PIN admin actualizado correctamente.")
+                st.rerun()
 
-        with st.expander("🔐 Recuperar contraseña", expanded=False):
-            recovery_pin = st.text_input(
-                "Clave de recuperación",
-                type="password",
-                max_chars=4,
-                key="sb_recovery_pin_sullair",
-                placeholder="1234",
-                help="Solo esta clave maestra permite cambiar el PIN admin del equipo.",
-            )
-            new_admin_pin = st.text_input(
-                "Nuevo PIN admin",
-                type="password",
-                max_chars=4,
-                key="sb_recovery_new_admin_pin_sullair",
-                placeholder="1234",
-                help="Se usa solo si se ingresa la clave maestra correcta.",
-            )
-            if st.button(
-                "Cambiar PIN admin",
-                key="sb_btn_recovery_change_pin_sullair",
-                use_container_width=True,
-            ):
-                if recovery_pin != RECOVERY_MASTER_PIN:
-                    st.warning("❌ Clave de recuperación incorrecta.")
-                elif not is_valid_service_pin(new_admin_pin):
-                    st.warning("❌ El nuevo PIN admin debe tener 4 dígitos numéricos.")
-                else:
-                    update_service_pin_value(new_admin_pin)
-                    st.success("✅ PIN admin actualizado correctamente.")
-                    st.rerun()
+    stored_admin_pin = (
+        mm.get_service_pin() if hasattr(mm, "get_service_pin") else "1234"
+    )
+    initial_setup = str(stored_admin_pin or "").strip() in ("", "1234")
 
+    # --- SECCIÓN SULLAIR ---
+    with st.expander("⚙️ Configuración Service Sullair", expanded=False):
         cfg_sullair = mm.get_machine_service_config("SULLAIR_COMPRESSOR")
         sb_last = st.number_input(
             "Último service (hs):",
@@ -600,11 +601,6 @@ with st.sidebar:
             step=100.0,
             key="sb_interval_sullair",
         )
-
-        stored_admin_pin = (
-            mm.get_service_pin() if hasattr(mm, "get_service_pin") else "1234"
-        )
-        initial_setup = str(stored_admin_pin or "").strip() in ("", "1234")
 
         c_sb1, c_sb2 = st.columns([1, 1])
         with c_sb1:
@@ -669,6 +665,7 @@ with st.sidebar:
                     st.success("✅ Service reseteado.")
                     st.rerun()
 
+    # --- SECCIÓN AERCOM ---
     with st.expander("⚙️ Configuración Service Aercom", expanded=False):
         cfg_aercom = mm.get_machine_service_config("AERCOM_22P")
         aercom_last = st.number_input(
@@ -828,7 +825,6 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
         go.Indicator(
             mode="gauge+number",
             value=value,
-            # Reservamos espacio suficiente arriba para separar el titulo del arco
             domain={"x": [0.06, 0.94], "y": [0, 0.68]},
             number={
                 "font": {"size": 34, "color": font_color},
@@ -848,7 +844,6 @@ def draw_gauge(value, title, max_val, color, unit, font_color, track_color):
         )
     )
 
-    # El titulo queda fuera del area del gauge para evitar superposiciones al ampliar.
     fig.add_annotation(
         text=f"<b>{title}</b>",
         x=0.5,
@@ -894,10 +889,18 @@ def draw_pressure_gauge(value, font_color, track_color):
     )
     fig.update_traces(
         gauge={
+            "axis": {
+                "range": [0, 15],
+                "tickvals": [0, 6.5, 8, 15],
+                "ticktext": ["0", "6.5", "8", "15"],
+                "tickwidth": 1,
+                "tickcolor": font_color,
+                "tickfont": {"size": 19, "color": font_color},
+            },
             "steps": [
                 {"range": [0, 6.5], "color": "#3F3F46"},
                 {"range": [6.5, 8], "color": "#166534"},
-                {"range": [8, 10], "color": "#991B1B"},
+                {"range": [8, 15], "color": "#991B1B"},
             ],
             "bar": {"color": "#F8FAFC"},
         }
@@ -935,11 +938,22 @@ def render_live_monitoring():
                     if pd.notna(row["pressure_bar"])
                     else None
                 )
+                pressure_sink = (
+                    float(row["pressure_sink_bar"])
+                    if pd.notna(row["pressure_sink_bar"])
+                    else None
+                )
                 separator_filter_dp = (
                     float(row["separator_filter_dp"])
                     if pd.notna(row["separator_filter_dp"])
                     else None
                 )
+                if (
+                    separator_filter_dp is None
+                    and pressure_sink is not None
+                    and press is not None
+                ):
+                    separator_filter_dp = max(0.0, pressure_sink - press)
                 hours = float(row["run_hours"]) if pd.notna(row["run_hours"]) else None
                 operating_state = (
                     translate_substate(row["operating_state"])
@@ -1030,18 +1044,16 @@ def render_live_monitoring():
                         )
 
                 # =========================================================================
-                # 🔊 INTEGRACIÓN DE LA LÓGICA DE ALARMA SONORA Y SILENCIAMIENTO POR COMPRESOR
+                # 🔊 LÓGICA DE ALARMA SONORA Y SILENCIAMIENTO POR COMPRESOR
                 # =========================================================================
                 compresor_id = str(row["machine_key"])
 
-                # Se dispara si hay temperatura fuera de rango, presión alta o falla de parada activa
                 condicion_temp = temperature_alert is not None
                 condicion_presion = pressure_alert is not None
                 condicion_falla = shutdown_code not in (None, 0)
 
                 alarma_critica = condicion_temp or condicion_presion or condicion_falla
 
-                # Limpiar registro si el compresor recupera la normalidad
                 if (
                     not alarma_critica
                     and compresor_id in st.session_state["acknowledged_alarms"]
@@ -1051,20 +1063,17 @@ def render_live_monitoring():
                 if alarma_critica:
                     is_ack = compresor_id in st.session_state["acknowledged_alarms"]
 
-                    # Emitir o cortar sonido según si el operador ya hizo ACK
                     if not is_ack:
                         trigger_alarm_sound()
                     else:
                         stop_alarm_sound()
 
-                    # Mostrar Falla de parada inmediatamente si existe
                     if condicion_falla:
                         st.markdown(
                             f"<div class='industrial-alert-failure'>🚨 FALLA DE PARADA: código {shutdown_code}</div>",
                             unsafe_allow_html=True,
                         )
 
-                    # Caja de interacción para mutear la chicharra presionando Enter
                     if not is_ack:
                         components.html(
                             "<script>document.body.focus();</script>",
@@ -1186,9 +1195,6 @@ def render_live_monitoring():
                             unsafe_allow_html=True,
                         )
 
-                # =========================================================================
-                # 🛠️ CONTADOR DE HORAS PARA SERVICE Y MANTENIMIENTO PREVENTIVO
-                # =========================================================================
                 if str(row["machine_key"]) == "SULLAIR_COMPRESSOR":
                     status_code = service_metrics["status"]
 
@@ -1448,7 +1454,6 @@ with tab2:
                             | (datos_diarios["desviacion_temperatura"] >= 20)
                         )
                     ]
-                    # Limitar muestras desviadas a un número manejable por día
                     for _, lectura in lecturas_con_desviacion.head(30).iterrows():
                         desviaciones = []
                         if lectura["desviacion_presion"] >= 20:
@@ -1504,7 +1509,6 @@ with tab2:
                     }
                 )
 
-            # Formateo y renderizado completamente a prueba de errores
             if not tabla_historial.empty:
                 tabla_historial = tabla_historial.reset_index(drop=True)
                 es_desviacion_list = tabla_historial["Es desviación"].tolist()

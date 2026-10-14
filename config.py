@@ -23,9 +23,8 @@ MODBUS_TIMEOUT = 1.5  # Timeout en segundos para sockets Modbus
 IP_SULLAIR_COMPRESSOR = (
     "192.168.0.128"  # IP fija asignada al conversor HF2211 del Sullair
 )
-IP_AERCOM_22P = "192.168.0.130"  # IP a definir al integrar Aercom
-IP_CHILLER_TRANE = "127.0.0.1"  # IP a definir al integrar Chiller Trane
-
+IP_AERCOM_22P = "192.168.0.130"  # IP de Aercom
+IP_CHILLER_TRANE = "192.168.0.196"  # IP  de Chiller trane
 # ------------------------------------------------------------------------------
 # 2. TIEMPOS Y FRECUENCIA DE MUESTREO (Pipeline de Adquisición)
 # ------------------------------------------------------------------------------
@@ -56,7 +55,49 @@ DATA_TIMEZONE = os.getenv("DATA_TIMEZONE", "America/Argentina/Buenos_Aires")
 # 4- Configurar SSID y Password del STA para que se conecte a la red de planta.
 
 
+# Configuracion WEB SULLAIR
+# System settings
+# ---IPs---
+# DHCP OFF
+# SULLAIR WAN IP 1921.168.0.128
+# SUBNET MASK 255.255.255.0
+# GATEWAY 192.168.0.1
+# DNS 10.10.100.254
+
+# --Serial Port settings
+# Baud rate 19200 - 8E1
+# Half duplex
+# CLI Disable
+# Protocol setting: Modbus
+
+# --Communicaton settings
+# Protocol tcp server
+# local port 502 buffer size 1024 keep alive 60 time out 100s
+# protocol settings max accept 20
+# security disable
+# route uart
+
+
 # CONFIGURACION WEB AERCOM
+# System settings
+# ---IPs---
+# AERCOM 192.168.0.130
+# --Serial Port settings
+# Baud rate 9600 - 8N1
+# Half duplex
+# CLI Serial string   300
+# Protocol setting: Modbus
+# --Communicaton settings
+# Protocol Tcp Server
+# Local port 502 - Buffe size 1024 - keep alive 60s - timeout 0s
+# 32
+# Security disable - Route UART
+
+
+# CONFIGURACION WEB TRANE
+# System settings
+# ---IPs---
+# TRANE 192.168.0.196
 # --Serial Port settings
 # Baud rate 9600 - 8N1
 # Half duplex
