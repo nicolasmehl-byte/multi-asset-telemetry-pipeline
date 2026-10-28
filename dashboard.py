@@ -322,13 +322,12 @@ with tab1:
                         if "SIN ADVERTENCIAS" not in warning
                     )
                     if maintenance_alerts:
-                        alert_tooltip = "&#10;".join(maintenance_alerts).replace(
-                            '"', "&quot;"
-                        )
-                        st.markdown(
-                            f"<span class='maintenance-badge' title=\"{alert_tooltip}\">🔧 ALARMA MANTENIMIENTO</span>",
-                            unsafe_allow_html=True,
-                        )
+                        with st.popover("🔧 ALARMA MANTENIMIENTO"):
+                            st.markdown(
+                                "\n".join(
+                                    f"- {warning}" for warning in maintenance_alerts
+                                )
+                            )
 
                 compresor_id = str(row["machine_key"])
                 condicion_temp = temperature_alert is not None
