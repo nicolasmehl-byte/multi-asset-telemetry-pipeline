@@ -1,9 +1,11 @@
 import json
+import math
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -79,6 +81,30 @@ SULLAIR_ON_STATES = {
 
 def translate_substate(value):
     return SUBSTATE_LABELS.get(str(value).strip().upper(), str(value))
+
+
+def estimate_service_days(
+    hours_remaining: float | None, start_date: date | None = None
+) -> int | None:
+    if (
+        hours_remaining is None
+        or not pd.notna(hours_remaining)
+        or not math.isfinite(hours_remaining)
+    ):
+        return None
+    if hours_remaining <= 0:
+        return 0
+
+    today = start_date or datetime.now(DATA_TIMEZONE).date()
+    service_date = today
+    remaining = hours_remaining
+    while remaining > 0:
+        service_date += timedelta(days=1)
+        weekday = service_date.weekday()
+        daily_hours = 24 if weekday < 5 else 12 if weekday == 5 else 0
+        remaining -= daily_hours
+
+    return (service_date - today).days
 
 
 def get_preventive_alerts(alert_key: str) -> dict:
@@ -368,9 +394,23 @@ with tab1:
                     pct_prog = service_metrics["progress_pct"]
                     status_col = service_metrics["status_color"]
                     service_progress = min(100.0, max(0.0, pct_prog))
+                    if service_metrics["status"] == "UNKNOWN":
+                        dias_service_label = "N/D"
+                    elif hs_restantes <= 0:
+                        dias_service_label = "SERVICE VENCIDO"
+                    else:
+                        dias_service = estimate_service_days(hs_restantes)
+                        unidad_dias = "día" if dias_service == 1 else "días"
+                        dias_service_label = (
+                            f"{dias_service} {unidad_dias} estimados"
+                            if dias_service is not None
+                            else "N/D"
+                        )
                 else:
                     hs_restantes = None
                     service_progress = 0.0
+                    status_col = "#94A3B8"
+                    dias_service_label = "N/D"
 
                 col_press, col_temp, col_hours = st.columns(3, gap="small")
                 delta_pressure = separator_filter_dp
@@ -442,6 +482,9 @@ with tab1:
                                     <span>{int(hs_restantes):,} hs</span>
                                     <span>{service_progress:.0f}%</span>
                                 </div>
+                                <div style="color: #EF4444; font-size: 1.2rem; font-weight: 200; margin-top: 6px;">
+                                    {dias_service_label} para el próximo service
+                                </div>
                             </div>
                             """,
                             unsafe_allow_html=True,
@@ -459,7 +502,7 @@ with tab1:
     else:
         stop_alarm_sound()
 
-# --- TAB 2: HISTORIAL DE TENDENCIAS ---
+# --- TAB 2: HISTORIAL DE TENDENCIAS (VERSION MEJORADA) ---
 with tab2:
     df_latest_names = db.get_latest_data()
 
@@ -483,7 +526,7 @@ with tab2:
                     "📆 Últimos 7 días",
                     "🗓️ Personalizado",
                 ],
-                index=0,
+                index=1,
                 key="history_period_preset",
             )
 
@@ -527,231 +570,259 @@ with tab2:
             nombre_activo = db.MACHINE_DISPLAY_LABEL.get(
                 selected_machine, selected_machine
             )
-            st.markdown(
-                f"#### Historial analítico: **{nombre_activo}** (`{len(df_hist):,} registros cargados`)"
+
+            # --- 1. RESUMEN EJECUTIVO (KPI CARDS) ---
+            t_max = df_hist["temperature_c"].max()
+            t_avg = df_hist["temperature_c"].mean()
+            p_min = df_hist["pressure_bar"].min()
+            p_avg = df_hist["pressure_bar"].mean()
+            reg_count = len(df_hist)
+
+            kpi1, kpi2, kpi3, kpi4, kpi5 = st.columns(5)
+            kpi1.metric(
+                "🌡️ Temp. Máx / Prom.",
+                f"{t_max:.1f} °C",
+                f"Prom: {t_avg:.1f} °C",
+                delta_color="off",
             )
-            st.caption(
-                f"Período mostrado: {df_hist['timestamp'].min():%d/%m/%Y %H:%M} a {df_hist['timestamp'].max():%d/%m/%Y %H:%M}"
+            kpi2.metric(
+                "📉 Presión Mín / Prom.",
+                f"{p_min:.1f} Bar",
+                f"Prom: {p_avg:.1f} Bar",
+                delta_color="off",
             )
-
-            fig_temp = px.line(
-                df_hist,
-                x="timestamp",
-                y="temperature_c",
-                title="📈 Evolución Térmica",
-                markers=bool(len(df_hist) < 150),
+            kpi3.metric("📊 Total Registros", f"{reg_count:,}")
+            kpi4.metric(
+                "⏱️ Período",
+                f"{(df_hist['timestamp'].max() - df_hist['timestamp'].min()).total_seconds()/3600:.1f} hs",
             )
-            fig_temp.update_traces(line_color="#FF5252", line_width=2)
-            fig_temp.update_layout(
-                template=plotly_theme,
-                hovermode="x unified",
-                margin=dict(l=20, r=20, t=40, b=20),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor=card_bg,
-                font=dict(color=text_color),
-                xaxis=dict(
-                    showgrid=True,
-                    gridcolor=grid_color,
-                    title="",
-                    tickformat="%d/%m/%Y",
-                    hoverformat="%d/%m/%Y %H:%M",
-                ),
-                yaxis=dict(
-                    showgrid=True, gridcolor=grid_color, title="Temperatura (°C)"
-                ),
+            run_hours = (
+                pd.to_numeric(df_hist["run_hours"], errors="coerce").dropna()
+                if "run_hours" in df_hist.columns
+                else pd.Series(dtype="float64")
             )
-            st.plotly_chart(
-                fig_temp, width="stretch", key=f"chart_h_temp_{selected_machine}"
-            )
-
-            fig_pres = px.line(
-                df_hist,
-                x="timestamp",
-                y="pressure_bar",
-                title="📉 Comportamiento de Presión",
-                markers=bool(len(df_hist) < 150),
-            )
-            fig_pres.update_traces(line_color="#00E676", line_width=2)
-            fig_pres.update_layout(
-                template=plotly_theme,
-                hovermode="x unified",
-                margin=dict(l=20, r=20, t=40, b=20),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor=card_bg,
-                font=dict(color=text_color),
-                xaxis=dict(
-                    showgrid=True,
-                    gridcolor=grid_color,
-                    title="",
-                    tickformat="%d/%m/%Y",
-                    hoverformat="%d/%m/%Y %H:%M",
-                ),
-                yaxis=dict(showgrid=True, gridcolor=grid_color, title="Presión (Bar)"),
-            )
-            st.plotly_chart(
-                fig_pres, width="stretch", key=f"chart_h_pres_{selected_machine}"
-            )
-
-            col_view_opt, col_limit_opt = st.columns([1, 1])
-            with col_view_opt:
-                vista_tabla = st.selectbox(
-                    "Vista de la tabla",
-                    ["Resumen diario (recomendado)", "Mostrar todos los datos crudos"],
-                    key="history_table_view",
-                )
-
-            if vista_tabla == "Resumen diario (recomendado)":
-                datos_diarios = df_hist.copy()
-                datos_diarios["fecha"] = datos_diarios["timestamp"].dt.date
-
-                promedios = (
-                    datos_diarios.groupby("fecha", as_index=False)
-                    .agg(
-                        Presión=("pressure_bar", "mean"),
-                        Temperatura=("temperature_c", "mean"),
-                    )
-                    .sort_values("fecha")
-                )
-                promedio_por_fecha = promedios.set_index("fecha")
-                datos_diarios["promedio_presion"] = datos_diarios["fecha"].map(
-                    promedio_por_fecha["Presión"]
-                )
-                datos_diarios["promedio_temperatura"] = datos_diarios["fecha"].map(
-                    promedio_por_fecha["Temperatura"]
-                )
-
-                def porcentaje_desviacion(valor, promedio):
-                    if pd.isna(valor) or pd.isna(promedio):
-                        return float("nan")
-                    if promedio == 0:
-                        return 0.0 if valor == 0 else float("inf")
-                    return abs(valor - promedio) / abs(promedio) * 100
-
-                datos_diarios["desviacion_presion"] = datos_diarios.apply(
-                    lambda fila: porcentaje_desviacion(
-                        fila["pressure_bar"], fila["promedio_presion"]
-                    ),
-                    axis=1,
-                )
-                datos_diarios["desviacion_temperatura"] = datos_diarios.apply(
-                    lambda fila: porcentaje_desviacion(
-                        fila["temperature_c"], fila["promedio_temperatura"]
-                    ),
-                    axis=1,
-                )
-
-                filas_resumen = []
-                for _, promedio in promedios.iterrows():
-                    fecha = promedio["fecha"]
-                    fecha_str = (
-                        fecha.strftime("%d/%m/%Y")
-                        if hasattr(fecha, "strftime")
-                        else str(fecha)
-                    )
-                    filas_resumen.append(
-                        {
-                            "Fecha completa": fecha_str,
-                            "Activo": nombre_activo,
-                            "Presión": promedio["Presión"],
-                            "Temperatura": promedio["Temperatura"],
-                            "Detalle": "Promedio diario",
-                            "Es desviación": False,
-                        }
-                    )
-
-                    lecturas_con_desviacion = datos_diarios[
-                        (datos_diarios["fecha"] == fecha)
-                        & (
-                            (datos_diarios["desviacion_presion"] >= 20)
-                            | (datos_diarios["desviacion_temperatura"] >= 20)
-                        )
-                    ]
-                    for _, lectura in lecturas_con_desviacion.head(30).iterrows():
-                        desviaciones = []
-                        if lectura["desviacion_presion"] >= 20:
-                            desviaciones.append(
-                                f"presión: {lectura['desviacion_presion']:.0f}%"
-                            )
-                        if lectura["desviacion_temperatura"] >= 20:
-                            desviaciones.append(
-                                f"temperatura: {lectura['desviacion_temperatura']:.0f}%"
-                            )
-                        filas_resumen.append(
-                            {
-                                "Fecha completa": lectura["timestamp"].strftime(
-                                    "%d/%m/%Y %H:%M:%S"
-                                ),
-                                "Activo": nombre_activo,
-                                "Presión": lectura["pressure_bar"],
-                                "Temperatura": lectura["temperature_c"],
-                                "Detalle": "Desviación del " + " y ".join(desviaciones),
-                                "Es desviación": True,
-                            }
-                        )
-
-                tabla_historial = pd.DataFrame(filas_resumen)
+            if len(run_hours) >= 2 and run_hours.iloc[-1] >= run_hours.iloc[0]:
+                hours_on = run_hours.iloc[-1] - run_hours.iloc[0]
+                hours_on_value = f"{hours_on:.1f} hs"
             else:
-                with col_limit_opt:
-                    if len(df_hist) > 500:
-                        limite_filas = st.selectbox(
-                            "Registros a mostrar en tabla:",
-                            ["Últimos 500", "Últimos 1.000", "Todos los registros"],
-                            index=0,
-                            key="history_raw_limit",
-                        )
-                        if limite_filas == "Últimos 500":
-                            df_hist_sub = df_hist.tail(500)
-                        elif limite_filas == "Últimos 1.000":
-                            df_hist_sub = df_hist.tail(1000)
-                        else:
-                            df_hist_sub = df_hist
-                    else:
-                        df_hist_sub = df_hist
+                hours_on_value = "N/D"
+            kpi5.metric("⚙️ Horas encendido", hours_on_value)
 
-                tabla_historial = pd.DataFrame(
+            st.markdown("---")
+
+            # --- 2. GRÁFICOS COMPACTOS EN 2 COLUMNAS ---
+            # Romper líneas continuas si hay baches de más de 15 mins (evitar la recta en vacíos)
+            df_plot = df_hist.copy().sort_values("timestamp")
+            df_plot["time_diff"] = df_plot["timestamp"].diff().dt.total_seconds()
+            df_plot.loc[
+                df_plot["time_diff"] > 900, ["temperature_c", "pressure_bar"]
+            ] = None
+
+            c_graph1, c_graph2 = st.columns(2)
+
+            with c_graph1:
+                st.markdown("##### 📈 Evolución Térmica")
+                fig_temp = px.line(
+                    df_plot, x="timestamp", y="temperature_c", height=280
+                )
+                fig_temp.update_traces(
+                    line_color="#FF5252", line_width=1.8, connectgaps=False
+                )
+                fig_temp.update_layout(
+                    template=plotly_theme,
+                    hovermode="x unified",
+                    margin=dict(l=10, r=10, t=20, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor=card_bg,
+                    font=dict(color=text_color, size=11),
+                    xaxis=dict(showgrid=True, gridcolor=grid_color, title=""),
+                    yaxis=dict(showgrid=True, gridcolor=grid_color, title="°C"),
+                )
+                st.plotly_chart(
+                    fig_temp, use_container_width=True, key=f"c_temp_{selected_machine}"
+                )
+
+            with c_graph2:
+                st.markdown("##### 📉 Comportamiento de Presión")
+                fig_pres = px.line(df_plot, x="timestamp", y="pressure_bar", height=280)
+                fig_pres.update_traces(
+                    line_color="#00E676", line_width=1.8, connectgaps=False
+                )
+                fig_pres.update_layout(
+                    template=plotly_theme,
+                    hovermode="x unified",
+                    margin=dict(l=10, r=10, t=20, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor=card_bg,
+                    font=dict(color=text_color, size=11),
+                    xaxis=dict(showgrid=True, gridcolor=grid_color, title=""),
+                    yaxis=dict(showgrid=True, gridcolor=grid_color, title="Bar"),
+                )
+                st.plotly_chart(
+                    fig_pres, use_container_width=True, key=f"c_pres_{selected_machine}"
+                )
+
+            # --- 3. EXPANDER PARA ZOOM O CORRELACIÓN AVANZADA ---
+            with st.expander("🔍 Ver Análisis Combinado y Zoom Detallado"):
+                fig_comb = go.Figure()
+                fig_comb.add_trace(
+                    go.Scatter(
+                        x=df_plot["timestamp"],
+                        y=df_plot["pressure_bar"],
+                        name="Presión (Bar)",
+                        line=dict(color="#00E676", width=2),
+                        connectgaps=False,
+                    )
+                )
+                fig_comb.add_trace(
+                    go.Scatter(
+                        x=df_plot["timestamp"],
+                        y=df_plot["temperature_c"],
+                        name="Temperatura (°C)",
+                        yaxis="y2",
+                        line=dict(color="#FF5252", width=2),
+                        connectgaps=False,
+                    )
+                )
+
+                fig_comb.update_layout(
+                    template=plotly_theme,
+                    height=420,
+                    hovermode="x unified",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor=card_bg,
+                    font=dict(color=text_color),
+                    xaxis=dict(
+                        showgrid=True, gridcolor=grid_color, title="Fecha y Hora"
+                    ),
+                    yaxis=dict(
+                        title=dict(text="Presión (Bar)", font=dict(color="#00E676")),
+                        showgrid=True,
+                        gridcolor=grid_color,
+                        tickfont=dict(color="#00E676"),
+                    ),
+                    yaxis2=dict(
+                        title=dict(text="Temperatura (°C)", font=dict(color="#FF5252")),
+                        overlaying="y",
+                        side="right",
+                        showgrid=False,
+                        tickfont=dict(color="#FF5252"),
+                    ),
+                    legend=dict(
+                        orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1
+                    ),
+                )
+                st.plotly_chart(
+                    fig_comb, use_container_width=True, key=f"comb_{selected_machine}"
+                )
+
+            st.markdown("---")
+
+            # --- 4. TABLA DE REGISTROS Y DESVIACIONES CRÍTICAS ---
+            alert_key = db.MACHINE_ALERT_KEY.get(selected_machine, selected_machine)
+            thresholds = PREVENTIVE_ALERTS.get(
+                alert_key,
+                {
+                    "max_temp": 90.0,
+                    "min_temp": 65.0,
+                    "max_press": 8.0,
+                    "min_press": 6.5,
+                },
+            )
+
+            col_t_title, col_t_filter, col_t_export = st.columns(
+                [2, 2, 1], vertical_alignment="center"
+            )
+            with col_t_title:
+                st.markdown("##### 📋 Registro Histórico de Operación")
+            with col_t_filter:
+                solo_anomalias = st.checkbox(
+                    "⚠️ Filtrar solo anomalías u omisiones fuera de rango", value=False
+                )
+            with col_t_export:
+                csv_data = df_hist.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "📥 Exportar CSV",
+                    data=csv_data,
+                    file_name=f"historial_{selected_machine}_{today}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+            # Lógica inteligente de detección de anomalías
+            df_table = df_hist.copy().sort_values("timestamp", ascending=False)
+
+            def evaluar_anomalia(row):
+                motivos = []
+                temp = row["temperature_c"]
+                press = row["pressure_bar"]
+
+                if pd.notna(temp) and temp > thresholds["max_temp"]:
+                    motivos.append(
+                        f"Alta Temp ({temp:.1f}°C > {thresholds['max_temp']}°C)"
+                    )
+                if pd.notna(press) and (
+                    press > thresholds["max_press"] or press < thresholds["min_press"]
+                ):
+                    motivos.append(f"Presión fuera de rango ({press:.1f} Bar)")
+
+                return ", ".join(motivos) if motivos else "Normal"
+
+            df_table["Detalle_Estado"] = df_table.apply(evaluar_anomalia, axis=1)
+            df_table["Es_Anomalia"] = df_table["Detalle_Estado"] != "Normal"
+
+            if solo_anomalias:
+                df_table_display = df_table[df_table["Es_Anomalia"]].copy()
+            else:
+                df_table_display = df_table.copy()
+
+            if not df_table_display.empty:
+                df_show = pd.DataFrame(
                     {
-                        "Fecha completa": df_hist_sub["timestamp"].dt.strftime(
+                        "Fecha y Hora": df_table_display["timestamp"].dt.strftime(
                             "%d/%m/%Y %H:%M:%S"
                         ),
                         "Activo": nombre_activo,
-                        "Presión": df_hist_sub["pressure_bar"],
-                        "Temperatura": df_hist_sub["temperature_c"],
-                        "Detalle": "Lectura registrada",
-                        "Es desviación": False,
+                        "Presión": df_table_display["pressure_bar"],
+                        "Temperatura": df_table_display["temperature_c"],
+                        "Estado / Advertencia": df_table_display["Detalle_Estado"],
+                        "_es_anomalia": df_table_display["Es_Anomalia"],
                     }
                 )
 
-            if not tabla_historial.empty:
-                tabla_historial = tabla_historial.reset_index(drop=True)
-                es_desviacion_list = tabla_historial["Es desviación"].tolist()
-                tabla_display = tabla_historial.drop(
-                    columns=["Es desviación"], errors="ignore"
-                )
+                es_anomalia_list = df_show["_es_anomalia"].tolist()
+                df_show_clean = df_show.drop(columns=["_es_anomalia"])
 
-                tabla_mostrada = tabla_display.style.apply(
+                # Aplicar color rojo suave SOLO a las anomalías reales
+                tabla_estilizada = df_show_clean.style.apply(
                     lambda _: [
                         (
-                            "background-color: #7f1d1d; color: #ffffff"
-                            if es_desviacion_list[i]
+                            "background-color: rgba(153, 27, 27, 0.4); color: #ffffff; font-weight: bold;"
+                            if es_anomalia_list[i]
                             else ""
                         )
-                        for i in range(len(tabla_display))
+                        for i in range(len(df_show_clean))
                     ],
                     axis=0,
                 )
+
                 st.dataframe(
-                    tabla_mostrada,
-                    width="stretch",
+                    tabla_estilizada,
+                    use_container_width=True,
                     hide_index=True,
+                    height=350,
                     column_config={
                         "Presión": st.column_config.NumberColumn(
-                            "Presión", format="%.1f bar"
+                            "Presión", format="%.1f Bar"
                         ),
                         "Temperatura": st.column_config.NumberColumn(
                             "Temperatura", format="%.1f °C"
                         ),
-                        "Detalle": st.column_config.TextColumn("Detalle"),
                     },
+                )
+            else:
+                st.success(
+                    "✅ No se detectaron anomalías fuera de rango en el período consultado."
                 )
         else:
             st.info(
