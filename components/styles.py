@@ -212,6 +212,63 @@ def inject_scada_styles():
             border-radius: 10px;
             font-weight: 700;
         }}
+        @media (max-width: 767px) {{
+            [data-testid="stMainBlockContainer"] {{
+                padding: 1rem 0.75rem 2rem;
+            }}
+            [data-testid="stHorizontalBlock"] {{
+                flex-wrap: wrap !important;
+                gap: 0.75rem;
+            }}
+            [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
+                flex: 1 1 100% !important;
+                width: 100% !important;
+                min-width: 0 !important;
+            }}
+            [data-baseweb="tab-list"] {{
+                overflow-x: auto;
+                flex-wrap: nowrap;
+            }}
+            [data-baseweb="tab"] {{
+                flex: 0 0 auto;
+                font-size: 0.95rem !important;
+                white-space: nowrap;
+            }}
+            .stApp h1 {{
+                font-size: 1.6rem !important;
+                line-height: 1.15 !important;
+            }}
+            [data-testid="stMetricValue"] {{
+                font-size: 1.6rem !important;
+            }}
+            [data-testid="stVerticalBlock"] > div[data-testid="stBlock"] {{
+                padding: 10px;
+            }}
+            [data-testid="stPlotlyChart"],
+            [data-testid="stDataFrame"] {{
+                max-width: 100%;
+                overflow-x: auto;
+            }}
+            [data-testid="stDownloadButton"] button,
+            [data-testid="stButton"] button {{
+                min-height: 44px;
+            }}
+        }}
+        @media (min-width: 768px) and (max-width: 1024px) {{
+            [data-testid="stMainBlockContainer"] {{
+                padding-left: 1.5rem;
+                padding-right: 1.5rem;
+            }}
+            [data-testid="stHorizontalBlock"] {{
+                flex-wrap: wrap !important;
+                gap: 1rem;
+            }}
+            [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {{
+                flex: 1 1 calc(50% - 1rem) !important;
+                width: calc(50% - 1rem) !important;
+                min-width: 0 !important;
+            }}
+        }}
         </style>
         """,
         unsafe_allow_html=True,
