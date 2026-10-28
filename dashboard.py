@@ -47,10 +47,12 @@ PREVENTIVE_ALERTS = {
     },
 }
 
+SULLAIR_MANUAL_DISABLED_STATE = "READY (LISTO)"
+
 SUBSTATE_LABELS = {
     "STOPPED": "DETENIDO",
     "OFF / DETENIDO": "DETENIDO",
-    "READY (LISTO)": "LISTO",
+    SULLAIR_MANUAL_DISABLED_STATE: "LISTO/DESACTIVADO MANUALMENTE",
     "ENABLED": "HABILITADO",
     "AUTOENABLED": "AUTO HABILITADO",
     "STARTING (ARRANCANDO)": "ARRANCANDO",
@@ -59,6 +61,19 @@ SUBSTATE_LABELS = {
     "FULL LOAD (PLENA CARGA)": "PLENA CARGA",
     "MODULATING (MODULANDO)": "MODULANDO",
     "STOPPING (PARANDO)": "DETENIENDO",
+}
+
+SULLAIR_OFF_STATES = {"STOPPED", "OFF / DETENIDO"}
+SULLAIR_ON_STATES = {
+    SULLAIR_MANUAL_DISABLED_STATE,
+    "ENABLED",
+    "AUTOENABLED",
+    "STARTING (ARRANCANDO)",
+    "UNLOADED (EN VACÍO)",
+    "LOADING (CARGANDO)",
+    "FULL LOAD (PLENA CARGA)",
+    "MODULATING (MODULANDO)",
+    "STOPPING (PARANDO)",
 }
 
 
@@ -164,6 +179,7 @@ tab1, tab2 = st.tabs(["🟢 Monitoreo en Vivo", "📈 Historial de Tendencias"])
 with tab1:
     df_latest = db.get_latest_data()
     TIMEOUT_DESCONEXION = int(os.getenv("TIMEOUT_DESCONEXION", "200"))
+    has_unacknowledged_critical_alarm = False
 
     if not df_latest.empty:
         for index, row in df_latest.iterrows():
@@ -208,6 +224,12 @@ with tab1:
                     if pd.notna(row["operating_state"])
                     else "N/D"
                 )
+                is_sullair_manual_disabled = (
+                    str(row["machine_key"]) == "SULLAIR_COMPRESSOR"
+                    and pd.notna(row["operating_state"])
+                    and str(row["operating_state"]).strip().upper()
+                    == SULLAIR_MANUAL_DISABLED_STATE
+                )
                 state_upper = str(operating_state).upper()
                 is_standby = "STANDBY" in state_upper or "ESPERA" in state_upper
                 shutdown_code = (
@@ -226,6 +248,22 @@ with tab1:
                 if segundos_sin_datos > TIMEOUT_DESCONEXION:
                     status = "SIN CONEXIÓN"
                     status_class = "status-offline"
+                elif str(row["machine_key"]) == "SULLAIR_COMPRESSOR" and pd.notna(
+                    row["operating_state"]
+                ):
+                    raw_state = str(row["operating_state"]).strip().upper()
+                    if raw_state in SULLAIR_ON_STATES:
+                        status = "ENCENDIDO"
+                        status_class = "status-on"
+                    elif raw_state in SULLAIR_OFF_STATES:
+                        status = "APAGADO"
+                        status_class = "status-off"
+                    elif press is not None and press > 1:
+                        status = "ENCENDIDO"
+                        status_class = "status-on"
+                    else:
+                        status = "APAGADO"
+                        status_class = "status-off"
                 elif press is not None and press > 1:
                     status = "ENCENDIDO"
                     status_class = "status-on"
@@ -262,7 +300,11 @@ with tab1:
                     if temp is not None:
                         if temp > thresholds["max_temp"]:
                             temperature_alert = f"Alta Temperatura: {temp} °C (Umbral: >{thresholds['max_temp']} °C)"
-                        elif temp < thresholds["min_temp"] and not is_standby:
+                        elif (
+                            temp < thresholds["min_temp"]
+                            and not is_standby
+                            and not is_sullair_manual_disabled
+                        ):
                             temperature_alert = f"Temperatura baja: {temp} °C (Umbral: <{thresholds['min_temp']} °C)"
 
                     if press is not None:
@@ -302,10 +344,7 @@ with tab1:
 
                 if alarma_critica:
                     is_ack = compresor_id in st.session_state["acknowledged_alarms"]
-                    if not is_ack:
-                        trigger_alarm_sound()
-                    else:
-                        stop_alarm_sound()
+                    has_unacknowledged_critical_alarm |= not is_ack
 
                     if condicion_falla:
                         st.markdown(
@@ -415,6 +454,11 @@ with tab1:
                 )
     else:
         st.warning("No se encontraron activos transmitiendo en vivo.")
+
+    if has_unacknowledged_critical_alarm:
+        trigger_alarm_sound()
+    else:
+        stop_alarm_sound()
 
 # --- TAB 2: HISTORIAL DE TENDENCIAS ---
 with tab2:
